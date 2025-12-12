@@ -1,0 +1,26 @@
+# MacOS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+
+# Rust build artifacts
+target/
+
+# Sample C file for check integration
+main.c
+uq_cbindgen*
+
+# Report files
+tarpaulin-report.html
+clippy.json
+lcov.info
+
+# Profiling files
+flamegraph.svg
+
+# Generated files
+generated/
+ios/
+android/

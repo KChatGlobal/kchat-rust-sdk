@@ -4,6 +4,7 @@ members = [
     "crates/kchat-mls",
     "crates/kchat-mls-uniffi",
     "crates/kchat-mls-napi",
+    "crates/uq-openmls",
 ]
 
 [workspace.dependencies]

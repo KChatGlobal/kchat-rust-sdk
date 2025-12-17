@@ -17,7 +17,7 @@ openmls_traits = { version = "0.4.0" }
 openmls_rust_crypto = { version =  "0.4.0" }
 openmls_sqlite_storage = { version = "0.1.0", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
-uq-openmls = { git = "ssh://git@github.com/KChatGlobal/sdk-rust.git", branch = "develop" }
+uq-openmls = { path = "../uq-openmls" }
 kchat-mls = {path = "../kchat-mls" }
 thiserror = { workspace = true }
 secrecy = { workspace = true }

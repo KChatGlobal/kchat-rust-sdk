@@ -12,7 +12,7 @@ openmls_rust_crypto = { version =  "0.4.1" }
 openmls_sqlite_storage = { version = "0.1.1", default-features = false }
 uq-openmls = { git = "ssh://git@github.com/KChatGlobal/sdk-rust.git", branch = "develop" }
 
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

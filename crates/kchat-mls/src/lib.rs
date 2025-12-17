@@ -4,11 +4,11 @@ use openmls::{
     group::{MlsGroup, MlsGroupJoinConfig},
     prelude::{BasicCredential, Credential},
 };
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use uq_openmls::{
     core::{
-        clear_pending_commit, delete_group, group, merge_pending_commit, process_operation_message,
-        process_proposal_message, process_welcome, Proposal,
+        Proposal, clear_pending_commit, delete_group, group, merge_pending_commit,
+        process_operation_message, process_proposal_message, process_welcome,
     },
     error::Error,
     provider::SqliteProvider,

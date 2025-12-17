@@ -1,5 +1,5 @@
 [package]
-name = "uq-mls-uniffi"
+name = "kchat-mls-uniffi"
 version = "0.1.0"
 edition = "2024"
 

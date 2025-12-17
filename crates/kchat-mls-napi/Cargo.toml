@@ -1,0 +1,26 @@
+
+[package]
+name = "kchat_mls_napi"
+version = "0.1.0"
+edition = "2024"
+authors = ["KChat Authors"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = "3.0.0"
+napi-derive = "3.0.0"
+openmls = { version = "0.7.0" }
+openmls_basic_credential = { version = "0.4.0" }
+openmls_traits = { version = "0.4.0" }
+openmls_rust_crypto = { version =  "0.4.0" }
+openmls_sqlite_storage = { version = "0.1.0", default-features = false }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uq-openmls = { git = "ssh://git@github.com/KChatGlobal/sdk-rust.git", branch = "develop" }
+kchat-mls = {path = "../kchat-mls" }
+thiserror = { workspace = true }
+secrecy = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"

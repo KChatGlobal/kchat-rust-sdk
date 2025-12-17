@@ -2,7 +2,8 @@
 resolver = "3"
 members = [
     "crates/kchat-mls",
-    "crates/kchat-mls-uniffi"
+    "crates/kchat-mls-uniffi",
+    "crates/kchat-mls-napi",
 ]
 
 [workspace.dependencies]

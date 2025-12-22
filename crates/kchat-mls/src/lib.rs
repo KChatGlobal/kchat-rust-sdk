@@ -23,6 +23,7 @@ pub struct AllMessagesOfGroupArgs {
     pub messages: Vec<MlsMessage>,
 }
 
+#[derive(Debug, Clone)]
 pub struct MlsMessage {
     pub blob: Vec<u8>,
     pub epoch: u64,
@@ -30,6 +31,7 @@ pub struct MlsMessage {
     pub message_type: MessageType,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum MessageType {
     Welcome,
     Commit,
@@ -182,7 +184,7 @@ pub fn process_all_messages(
 
             let mut pending_operation: GroupPendingOperation =
                 get_group_pending_operation(group_storage_path, group_id)?.into();
-            let first_mls_message = messages_of_group.messages.first();
+            let first_mls_message = get_first_message(group.epoch().as_u64(), &messages_of_group);
             if group.epoch().as_u64() == 0 {
                 pending_operation = GroupPendingOperation::CreateGroup;
             }
@@ -265,6 +267,19 @@ pub fn process_all_messages(
     }
 
     Ok(result)
+}
+
+fn get_first_message(
+    group_epoch: u64,
+    messages_of_group: &AllMessagesOfGroupArgs,
+) -> Option<&MlsMessage> {
+    for message in &messages_of_group.messages {
+        if message.epoch == group_epoch + 1 && message.message_type == MessageType::Commit {
+            return Some(message);
+        }
+    }
+
+    None
 }
 
 fn own_id_from_leaf_node(group: &MlsGroup) -> Option<String> {

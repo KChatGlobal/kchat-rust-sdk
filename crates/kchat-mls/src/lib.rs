@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use openmls::{
     group::{MlsGroup, MlsGroupJoinConfig},
@@ -184,15 +184,15 @@ pub fn process_all_messages(
 
             let mut pending_operation: GroupPendingOperation =
                 get_group_pending_operation(group_storage_path, group_id)?.into();
-            let first_mls_message = get_first_message(group.epoch().as_u64(), &messages_of_group);
             if group.epoch().as_u64() == 0 {
                 pending_operation = GroupPendingOperation::CreateGroup;
             }
+            let first_message = get_first_message(group.epoch().as_u64(), &messages_of_group);
 
             match pending_operation {
                 GroupPendingOperation::CreateGroup
                 | GroupPendingOperation::JoinByExternalCommit => {
-                    if let Some(msg) = first_mls_message {
+                    if let Some(msg) = first_message {
                         if !own_member_id.contains(&msg.sender) {
                             delete_group(provider, group_id)?;
                             let _ = delete_group_status(group_storage_path, group_id);
@@ -206,7 +206,7 @@ pub fn process_all_messages(
                     // TODO: handle leave group
                 }
                 GroupPendingOperation::UpdateTree => {
-                    if let Some(msg) = first_mls_message {
+                    if let Some(msg) = first_message {
                         if !own_member_id.contains(&msg.sender) {
                             clear_pending_commit(provider, group_id)?;
                         } else {
@@ -226,16 +226,29 @@ pub fn process_all_messages(
             }
         }
 
-        let mut group_result = GroupResult {
-            group_id: group_id.to_owned(),
-            members_to_remove: Vec::new(),
-        };
-        let mut group_member_set = HashSet::new();
-        if let Ok(group) = group(provider, group_id) {
-            for member in group.members() {
-                if let Some(id) = id_from_credential(&member.credential) {
-                    group_member_set.insert(id);
+        let mut members_to_remove_hashmap = HashMap::new();
+
+        for msg in &messages_of_group.messages {
+            match msg.message_type {
+                MessageType::Proposal => {
+                    if let Ok(proposal) = process_proposal_message(provider, group_id, &msg.blob) {
+                        let mut group_member_set = HashSet::new();
+                        if let Ok(group) = group(provider, group_id) {
+                            for member in group.members() {
+                                if let Some(id) = id_from_credential(&member.credential) {
+                                    group_member_set.insert(id);
+                                }
+                            }
+                        }
+
+                        if group_member_set.contains(&proposal.sender) {
+                            if let Proposal::Remove = proposal.proposal {
+                                members_to_remove_hashmap.insert(proposal.sender, msg.epoch);
+                            }
+                        }
+                    }
                 }
+                _ => (),
             }
         }
 
@@ -250,20 +263,41 @@ pub fn process_all_messages(
                     if let Err(err) = process_operation_message(provider, group_id, &msg.blob) {
                         println!("process commit error: {:?}", err.to_string());
                     }
-                }
-                MessageType::Proposal => {
-                    if let Ok(proposal) = process_proposal_message(provider, group_id, &msg.blob) {
-                        if group_member_set.contains(&proposal.sender) {
-                            if let Proposal::Remove = proposal.proposal {
-                                group_result.members_to_remove.push(proposal.sender);
+
+                    let mut already_remove_members = Vec::new();
+                    for (need_remove_member_id, epoch) in members_to_remove_hashmap.iter() {
+                        if msg.epoch >= *epoch {
+                            let mut group_member_set = HashSet::new();
+                            if let Ok(group) = group(provider, group_id) {
+                                for member in group.members() {
+                                    if let Some(id) = id_from_credential(&member.credential) {
+                                        group_member_set.insert(id);
+                                    }
+                                }
+                            }
+
+                            if !group_member_set.contains(need_remove_member_id) {
+                                already_remove_members.push(need_remove_member_id.to_owned());
                             }
                         }
                     }
+
+                    for member_id in already_remove_members {
+                        members_to_remove_hashmap.remove(&member_id);
+                    }
                 }
+                _ => (),
             }
         }
 
-        result.group_results.push(group_result);
+        result.group_results.push(GroupResult {
+            group_id: group_id.to_owned(),
+            members_to_remove: members_to_remove_hashmap
+                .keys()
+                .into_iter()
+                .map(|member_id| member_id.to_owned())
+                .collect(),
+        });
     }
 
     Ok(result)

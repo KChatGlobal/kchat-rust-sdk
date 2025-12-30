@@ -1,0 +1,398 @@
+name: Release Builds (kchat-mls-napi)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  validate:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    outputs:
+      tag_name: ${{ steps.check.outputs.tag_name }}
+
+    steps:
+      - name: Determine tag information
+        id: check
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
+          echo "═══════════════════════════════════════════════════════════"
+          echo "🏷️ Tag Detected: ${TAG}"
+          echo "📦 Building: kchat-mls-napi"
+          echo "✅ Validation: Passed"
+          echo "═══════════════════════════════════════════════════════════"
+  build-linux:
+    name: Build Linux (x86_64)
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Print build information
+        shell: bash
+        run: |
+          echo "═══════════════════════════════════════════════════════════"
+          echo "🐧 Linux Build Started"
+          echo "═══════════════════════════════════════════════════════════"
+          echo "📋 Version: ${{ needs.validate.outputs.tag_name }}"
+          echo "💻 Platform: Linux x86_64"
+          echo "🏃 Runner: ${{ runner.os }}"
+          echo "═══════════════════════════════════════════════════════════"
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Configure Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Cache Yarn dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+            crates/kchat-mls-napi/node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('crates/kchat-mls-napi/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Enable Yarn via Corepack
+        working-directory: crates/kchat-mls-napi
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+          yarn --version
+      - name: Install dependencies
+        working-directory: crates/kchat-mls-napi
+        run: |
+          yarn install --immutable
+      - name: Build NAPI module
+        working-directory: crates/kchat-mls-napi
+        run: |
+          yarn exec napi build --target x86_64-unknown-linux-gnu --release
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Linux-x64
+          path: |
+            crates/kchat-mls-napi/*.node
+            crates/kchat-mls-napi/index.js
+            crates/kchat-mls-napi/index.d.ts
+          retention-days: 30
+          if-no-files-found: error
+
+  build-macos-intel:
+    name: Build macOS (x86_64)
+    needs: validate
+    runs-on: macos-latest
+
+    steps:
+      - name: Print build information
+        shell: bash
+        run: |
+          echo "═══════════════════════════════════════════════════════════"
+          echo "🍎 macOS Intel Build Started"
+          echo "═══════════════════════════════════════════════════════════"
+          echo "📋 Version: ${{ needs.validate.outputs.tag_name }}"
+          echo "💻 Platform: macOS x86_64"
+          echo "🏃 Runner: ${{ runner.os }}"
+          echo "═══════════════════════════════════════════════════════════"
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Configure Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Cache Yarn dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+            crates/kchat-mls-napi/node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('crates/kchat-mls-napi/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Enable Yarn via Corepack
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+          yarn --version
+      - name: Install dependencies
+        working-directory: crates/kchat-mls-napi
+        run: |
+          yarn install --immutable
+      - name: Add Rust Target
+        working-directory: crates/kchat-mls-napi
+        run: |
+          rustup target add x86_64-apple-darwin
+      - name: Build NAPI module
+        working-directory: crates/kchat-mls-napi
+        run: |
+          yarn exec napi build --target x86_64-apple-darwin --release
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-x64
+          path: |
+            crates/kchat-mls-napi/*.node
+            crates/kchat-mls-napi/index.js
+            crates/kchat-mls-napi/index.d.ts
+          retention-days: 30
+          if-no-files-found: error
+
+  build-macos-arm:
+    name: Build macOS (arm64)
+    needs: validate
+    runs-on: macos-latest
+
+    steps:
+      - name: Print build information
+        shell: bash
+        run: |
+          echo "═══════════════════════════════════════════════════════════"
+          echo "🍎 macOS ARM Build Started"
+          echo "═══════════════════════════════════════════════════════════"
+          echo "📋 Version: ${{ needs.validate.outputs.tag_name }}"
+          echo "💻 Platform: macOS arm64"
+          echo "🏃 Runner: ${{ runner.os }}"
+          echo "═══════════════════════════════════════════════════════════"
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Configure Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Cache Yarn dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+            crates/kchat-mls-napi/node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('crates/kchat-mls-napi/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Enable Yarn via Corepack
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+          yarn --version
+      - name: Install dependencies
+        working-directory: crates/kchat-mls-napi
+        run: |
+          yarn install --immutable
+      - name: Build NAPI module
+        working-directory: crates/kchat-mls-napi
+        run: |
+          yarn exec napi build --target aarch64-apple-darwin --release
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-arm64
+          path: |
+            crates/kchat-mls-napi/*.node
+            crates/kchat-mls-napi/index.js
+            crates/kchat-mls-napi/index.d.ts
+          retention-days: 30
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows (x86_64)
+    needs: validate
+    runs-on: windows-latest
+
+    steps:
+      - name: Print build information
+        shell: bash
+        run: |
+          echo "═══════════════════════════════════════════════════════════"
+          echo "🪟 Windows Build Started"
+          echo "═══════════════════════════════════════════════════════════"
+          echo "📋 Version: ${{ needs.validate.outputs.tag_name }}"
+          echo "💻 Platform: Windows x86_64"
+          echo "🏃 Runner: ${{ runner.os }}"
+          echo "═══════════════════════════════════════════════════════════"
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Configure Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Cache Yarn dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+            crates/kchat-mls-napi/node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('crates/kchat-mls-napi/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Enable Yarn via Corepack
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+          yarn --version
+      - name: Install dependencies
+        working-directory: crates/kchat-mls-napi
+        run: |
+          yarn install --immutable
+      - name: Build NAPI module
+        working-directory: crates/kchat-mls-napi
+        run: |
+          yarn exec napi build --target x86_64-pc-windows-msvc --release
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-x64
+          path: |
+            crates/kchat-mls-napi/*.node
+            crates/kchat-mls-napi/index.js
+            crates/kchat-mls-napi/index.d.ts
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    name: Create Release and Upload Assets
+    needs:
+      [validate, build-linux, build-macos-intel, build-macos-arm, build-windows]
+    runs-on: ubuntu-latest
+    if: success()
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+
+          # Copy .node files with platform suffix
+          for artifact_dir in artifacts/*/; do
+            platform=$(basename "$artifact_dir")
+            node_file=$(find "$artifact_dir" -name "*.node" -type f | head -n 1)
+            if [ -n "$node_file" ]; then
+              node_name=$(basename "$node_file")
+              new_name="${node_name%.node}-${platform}.node"
+              cp "$node_file" "release-assets/$new_name"
+            fi
+
+            # Copy index.js and index.d.ts only once (they're the same across platforms)
+            if [ ! -f "release-assets/index.js" ] && [ -f "$artifact_dir/index.js" ]; then
+              cp "$artifact_dir/index.js" "release-assets/index.js"
+            fi
+            if [ ! -f "release-assets/index.d.ts" ] && [ -f "$artifact_dir/index.d.ts" ]; then
+              cp "$artifact_dir/index.d.ts" "release-assets/index.d.ts"
+            fi
+          done
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag_name }}
+          name: Release ${{ needs.validate.outputs.tag_name }}
+          files: |
+            release-assets/*.node
+            release-assets/index.js
+            release-assets/index.d.ts
+          draft: false
+          prerelease: ${{ contains(needs.validate.outputs.tag_name, 'beta') || contains(needs.validate.outputs.tag_name, 'alpha') || contains(needs.validate.outputs.tag_name, 'rc') }}

@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    u64,
+};
 
 use openmls::{
     group::{MlsGroup, MlsGroupJoinConfig},
@@ -224,6 +227,21 @@ pub fn process_all_messages(
                 }
                 GroupPendingOperation::None => (),
             }
+
+            // check if first or second message is a welcome and that is the very first epoch
+            // then check if that welcome is for current user
+            // if that is for current user then delete current group then process welcome
+            if let Some(welcome_message) = get_first_welcome(&messages_of_group) {
+                if group.epoch().as_u64() < welcome_message.epoch {
+                    if let Err(err) = process_welcome(provider, &welcome_message.blob, join_config)
+                    {
+                        if let Error::WelcomeGroupAlreadyExisted = err {
+                            delete_group(provider, group_id)?;
+                            let _ = delete_group_status(group_storage_path, group_id);
+                        }
+                    }
+                }
+            }
         }
 
         let mut members_to_remove_hashmap = HashMap::new();
@@ -309,6 +327,23 @@ fn get_first_message(
 ) -> Option<&MlsMessage> {
     for message in &messages_of_group.messages {
         if message.epoch == group_epoch + 1 && message.message_type == MessageType::Commit {
+            return Some(message);
+        }
+    }
+
+    None
+}
+
+fn get_first_welcome(messages_of_group: &AllMessagesOfGroupArgs) -> Option<&MlsMessage> {
+    let mut first_epoch = u64::MAX;
+
+    for message in &messages_of_group.messages {
+        if message.epoch > first_epoch {
+            break;
+        }
+
+        first_epoch = message.epoch;
+        if message.message_type == MessageType::Welcome {
             return Some(message);
         }
     }

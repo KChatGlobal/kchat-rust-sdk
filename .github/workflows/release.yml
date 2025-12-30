@@ -21,11 +21,13 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
+
           echo "═══════════════════════════════════════════════════════════"
           echo "🏷️ Tag Detected: ${TAG}"
           echo "📦 Building: kchat-mls-napi"
           echo "✅ Validation: Passed"
           echo "═══════════════════════════════════════════════════════════"
+
   build-linux:
     name: Build Linux (x86_64)
     needs: validate
@@ -42,6 +44,7 @@ jobs:
           echo "💻 Platform: Linux x86_64"
           echo "🏃 Runner: ${{ runner.os }}"
           echo "═══════════════════════════════════════════════════════════"
+
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
@@ -69,6 +72,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
       - name: Cache Yarn dependencies
         uses: actions/cache@v4
         with:
@@ -79,6 +83,7 @@ jobs:
           key: ${{ runner.os }}-yarn-${{ hashFiles('crates/kchat-mls-napi/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
+
       - name: Enable Yarn via Corepack
         working-directory: crates/kchat-mls-napi
         shell: bash
@@ -86,14 +91,17 @@ jobs:
           corepack enable
           corepack prepare yarn@4.9.1 --activate
           yarn --version
+
       - name: Install dependencies
         working-directory: crates/kchat-mls-napi
         run: |
           yarn install --immutable
+
       - name: Build NAPI module
         working-directory: crates/kchat-mls-napi
         run: |
           yarn exec napi build --target x86_64-unknown-linux-gnu --release
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -121,6 +129,7 @@ jobs:
           echo "💻 Platform: macOS x86_64"
           echo "🏃 Runner: ${{ runner.os }}"
           echo "═══════════════════════════════════════════════════════════"
+
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
@@ -148,6 +157,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
       - name: Cache Yarn dependencies
         uses: actions/cache@v4
         with:
@@ -158,24 +168,29 @@ jobs:
           key: ${{ runner.os }}-yarn-${{ hashFiles('crates/kchat-mls-napi/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
+
       - name: Enable Yarn via Corepack
         shell: bash
         run: |
           corepack enable
           corepack prepare yarn@4.9.1 --activate
           yarn --version
+
       - name: Install dependencies
         working-directory: crates/kchat-mls-napi
         run: |
           yarn install --immutable
+
       - name: Add Rust Target
         working-directory: crates/kchat-mls-napi
         run: |
           rustup target add x86_64-apple-darwin
+
       - name: Build NAPI module
         working-directory: crates/kchat-mls-napi
         run: |
           yarn exec napi build --target x86_64-apple-darwin --release
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -203,6 +218,7 @@ jobs:
           echo "💻 Platform: macOS arm64"
           echo "🏃 Runner: ${{ runner.os }}"
           echo "═══════════════════════════════════════════════════════════"
+
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
@@ -230,6 +246,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
       - name: Cache Yarn dependencies
         uses: actions/cache@v4
         with:
@@ -240,20 +257,24 @@ jobs:
           key: ${{ runner.os }}-yarn-${{ hashFiles('crates/kchat-mls-napi/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
+
       - name: Enable Yarn via Corepack
         shell: bash
         run: |
           corepack enable
           corepack prepare yarn@4.9.1 --activate
           yarn --version
+
       - name: Install dependencies
         working-directory: crates/kchat-mls-napi
         run: |
           yarn install --immutable
+
       - name: Build NAPI module
         working-directory: crates/kchat-mls-napi
         run: |
           yarn exec napi build --target aarch64-apple-darwin --release
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -281,6 +302,7 @@ jobs:
           echo "💻 Platform: Windows x86_64"
           echo "🏃 Runner: ${{ runner.os }}"
           echo "═══════════════════════════════════════════════════════════"
+
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
@@ -308,6 +330,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
       - name: Cache Yarn dependencies
         uses: actions/cache@v4
         with:
@@ -318,20 +341,24 @@ jobs:
           key: ${{ runner.os }}-yarn-${{ hashFiles('crates/kchat-mls-napi/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
+
       - name: Enable Yarn via Corepack
         shell: bash
         run: |
           corepack enable
           corepack prepare yarn@4.9.1 --activate
           yarn --version
+
       - name: Install dependencies
         working-directory: crates/kchat-mls-napi
         run: |
           yarn install --immutable
+
       - name: Build NAPI module
         working-directory: crates/kchat-mls-napi
         run: |
           yarn exec napi build --target x86_64-pc-windows-msvc --release
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -385,6 +412,7 @@ jobs:
               cp "$artifact_dir/index.d.ts" "release-assets/index.d.ts"
             fi
           done
+
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         with:

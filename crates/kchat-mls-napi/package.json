@@ -1,7 +1,32 @@
 {
-  "name": "kchat-mls-napi",
+  "name": "@kchat/mls-napi",
   "version": "0.1.0",
+  "description": "Node.js bindings for KChat MLS SDK using NAPI-RS",
   "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./index.js",
+      "import": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "npm/**/*",
+    "*.node",
+    "README.md"
+  ],
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
   "napi": {
     "binaryName": "kchat-mls-napi",
     "targets": [
@@ -12,7 +37,7 @@
     ]
   },
   "engines": {
-    "node": ">= 6.14.2 < 7 || >= 8.11.2 < 9 || >= 9.11.0 < 10 || >= 10.0.0"
+    "node": ">= 10"
   },
   "packageManager": "yarn@4.9.1",
   "scripts": {
@@ -20,7 +45,21 @@
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "version": "napi version",
-    "bump": "node scripts/version.js"
+    "bump": "node scripts/version.js",
+    "#prepublishOnly": "napi build --platform --release",
+    "install": "node scripts/install.js"
+  },
+  "keywords": [
+    "napi",
+    "napi-rs",
+    "mls",
+    "kchat",
+    "native",
+    "addon"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   },
   "devDependencies": {
     "@emnapi/core": "^1.5.0",

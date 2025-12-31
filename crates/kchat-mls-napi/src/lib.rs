@@ -4,7 +4,7 @@ pub mod error;
 
 use kchat_mls::{
     GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT, delete_group_status,
-    get_group_pending_operation, insert_or_update_group_status, process_all_messages,
+    get_group_pending_operation, initialize, insert_or_update_group_status, process_all_messages,
 };
 use napi_derive::napi;
 use openmls::{
@@ -372,6 +372,8 @@ impl UqMls {
         maximum_forward_distance: u32,
     ) -> napi::Result<Self> {
         let secret = password.map(SecretString::from);
+        let _ = initialize(&group_storage_path);
+
         Ok(Self {
             client_id,
             storage_path,
@@ -726,6 +728,11 @@ impl UqMls {
         let provider = self.provider()?;
 
         clear_pending_proposals(&provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
+        let _ = insert_or_update_group_status(
+            &self.group_storage_path,
+            &group_id,
+            GroupPendingOperation::None,
+        );
 
         Ok(())
     }

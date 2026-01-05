@@ -190,7 +190,11 @@ pub fn process_all_messages(
             if group.epoch().as_u64() == 0 {
                 pending_operation = GroupPendingOperation::CreateGroup;
             }
-            let first_message = get_first_message(group.epoch().as_u64(), &messages_of_group);
+            let first_message = get_first_message(
+                group.epoch().as_u64(),
+                &messages_of_group,
+                pending_operation,
+            );
 
             match pending_operation {
                 GroupPendingOperation::CreateGroup
@@ -199,11 +203,19 @@ pub fn process_all_messages(
                         if !own_member_id.contains(&msg.sender) {
                             delete_group(provider, group_id)?;
                             let _ = delete_group_status(group_storage_path, group_id);
+                        } else {
+                            merge_pending_commit(provider, group_id)?;
                         }
                     } else {
                         delete_group(provider, group_id)?;
                         let _ = delete_group_status(group_storage_path, group_id);
                     }
+
+                    let _ = insert_or_update_group_status(
+                        group_storage_path,
+                        group_id,
+                        GroupPendingOperation::None,
+                    );
                 }
                 GroupPendingOperation::LeaveGroup => {
                     // TODO: handle leave group
@@ -322,9 +334,14 @@ pub fn process_all_messages(
 }
 
 fn get_first_message(
-    group_epoch: u64,
+    mut group_epoch: u64,
     messages_of_group: &AllMessagesOfGroupArgs,
+    pending_operation: GroupPendingOperation,
 ) -> Option<&MlsMessage> {
+    if pending_operation == GroupPendingOperation::JoinByExternalCommit {
+        group_epoch -= 1;
+    }
+
     for message in &messages_of_group.messages {
         if message.epoch == group_epoch + 1 && message.message_type == MessageType::Commit {
             return Some(message);

@@ -1,6 +1,7 @@
 use kchat_mls::{
-    GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT, delete_group_status,
-    get_group_pending_operation, initialize, insert_or_update_group_status, process_all_messages,
+    CreateCustomProposalArgs, GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT,
+    create_custom_proposal, delete_group_status, get_group_pending_operation, initialize,
+    insert_or_update_group_status, process_all_messages,
 };
 use openmls::{
     group::{
@@ -10,6 +11,7 @@ use openmls::{
     },
     prelude::{BasicCredential, Ciphersuite, SenderRatchetConfiguration},
 };
+use rusqlite::Connection;
 use secrecy::SecretString;
 use uq_openmls::{
     core::{self, DEFAULT_CIPHERSUITE},
@@ -182,6 +184,25 @@ impl From<core::JoinByExternalCommitResult> for JoinByExternalCommitResult {
 }
 
 #[derive(uniffi::Record)]
+pub struct ReAddResult {
+    pub commit: Vec<u8>,
+    pub welcome: Option<Vec<u8>>,
+    pub group_info: Option<Vec<u8>>,
+    pub current_epoch: u64,
+}
+
+impl From<core::ReAddResult> for ReAddResult {
+    fn from(value: core::ReAddResult) -> Self {
+        Self {
+            welcome: value.welcome,
+            commit: value.commit,
+            group_info: value.group_info,
+            current_epoch: value.current_epoch,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
 pub struct JoinByExternalCommitArgs {
     pub group_id: String,
     pub group_info: Vec<u8>,
@@ -205,6 +226,16 @@ impl From<core::LeaveGroupResult> for LeaveGroupResult {
             proposal: value.proposal,
         }
     }
+}
+
+#[derive(uniffi::Record)]
+pub struct ProposeReAddResult {
+    pub proposal: Vec<u8>,
+}
+
+#[derive(uniffi::Record)]
+pub struct ProposeReAddRequest {
+    pub mls_fingerprint: String,
 }
 
 #[derive(uniffi::Record)]
@@ -319,12 +350,44 @@ pub struct MlsMessage {
 #[derive(uniffi::Record)]
 pub struct GroupResult {
     pub group_id: String,
-    pub members_to_remove: Vec<String>,
+    pub members_to_remove: Vec<MemberInfo>,
+    pub members_to_readd: Vec<MemberInfo>,
+}
+
+#[derive(uniffi::Record, Debug, Eq, PartialEq, Hash, Clone)]
+pub struct MemberInfo {
+    pub mls_client_id: String,
+    pub mls_fingerprint: String,
 }
 
 #[derive(uniffi::Record)]
 pub struct ProcessAllMessagesResult {
     pub group_results: Vec<GroupResult>,
+    pub deleted_groups: Vec<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct CustomProposal {
+    pub mls_client_id: String,
+    pub mls_fingerprint: String,
+    pub group_id: String,
+    pub proposal_type: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct GetPendingCreationGroupsResult {
+    pub group_ids: Vec<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct ProcessPendingCreationsArgs {
+    groups: Vec<PendingCreationGroup>,
+}
+
+#[derive(uniffi::Record)]
+pub struct PendingCreationGroup {
+    pub group_id: String,
+    pub group_info: Vec<u8>,
 }
 
 #[uniffi::export]
@@ -338,11 +401,12 @@ impl UqMls {
         password: Option<String>,
         out_of_order_tolerance: u32,
         maximum_forward_distance: u32,
-    ) -> UqMls {
+    ) -> Result<UqMls, Error> {
         let secret = password.map(SecretString::from);
-        let _ = initialize(&group_storage_path);
+        let conn = Connection::open(&group_storage_path)?;
+        let _ = initialize(&conn);
 
-        UqMls {
+        Ok(UqMls {
             client_id,
             storage_path,
             group_storage_path,
@@ -353,7 +417,7 @@ impl UqMls {
             secret,
             out_of_order_tolerance,
             maximum_forward_distance,
-        }
+        })
     }
 
     pub fn generate_signature_key(&self) -> Result<SignaturePublicKey, Error> {
@@ -412,11 +476,8 @@ impl UqMls {
             public_key,
         )?;
 
-        let _ = insert_or_update_group_status(
-            &self.group_storage_path,
-            group_id,
-            GroupPendingOperation::CreateGroup,
-        );
+        let conn = Connection::open(&self.group_storage_path)?;
+        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::CreateGroup);
 
         Ok(())
     }
@@ -429,13 +490,59 @@ impl UqMls {
         let provider = self.provider()?;
 
         let result = core::add_members(&provider, group_id, key_packages)?;
-        let _ = insert_or_update_group_status(
-            &self.group_storage_path,
-            group_id,
-            GroupPendingOperation::UpdateTree,
-        );
+        let conn = Connection::open(&self.group_storage_path)?;
+
+        let mut current_pending_operation = GroupPendingOperation::None;
+        if let Ok(op) = get_group_pending_operation(&conn, group_id) {
+            current_pending_operation = op.into();
+        }
+
+        if current_pending_operation == GroupPendingOperation::None {
+            let _ =
+                insert_or_update_group_status(&conn, group_id, GroupPendingOperation::UpdateTree);
+        }
 
         Ok(result.into())
+    }
+
+    pub fn readd(
+        &self,
+        group_id: &str,
+        member_ids: &[String],
+        key_packages: &[Vec<u8>],
+    ) -> Result<ReAddResult, Error> {
+        let provider = self.provider()?;
+
+        let result = core::readd(
+            &provider,
+            group_id,
+            &member_ids
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<&str>>(),
+            key_packages,
+        )?;
+        let conn = Connection::open(&self.group_storage_path)?;
+        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::UpdateTree);
+
+        Ok(result.into())
+    }
+
+    pub fn propose_readd(
+        &self,
+        group_id: &str,
+        request: ProposeReAddRequest,
+    ) -> Result<ProposeReAddResult, Error> {
+        Ok(ProposeReAddResult {
+            proposal: create_custom_proposal(
+                &self.client_id,
+                group_id,
+                CreateCustomProposalArgs {
+                    mls_fingerprint: request.mls_fingerprint.to_owned(),
+                    custom_proposal_type: kchat_mls::CustomProposalType::ReAdd,
+                },
+            ),
+        })
     }
 
     pub fn remove_members(
@@ -453,11 +560,8 @@ impl UqMls {
                 .map(|id| id.as_str())
                 .collect::<Vec<&str>>(),
         )?;
-        let _ = insert_or_update_group_status(
-            &self.group_storage_path,
-            group_id,
-            GroupPendingOperation::UpdateTree,
-        );
+        let conn = Connection::open(&self.group_storage_path)?;
+        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::UpdateTree);
 
         Ok(result.into())
     }
@@ -530,6 +634,20 @@ impl UqMls {
         Ok(queued_proposal.into())
     }
 
+    pub fn process_custom_proposal_message(
+        &self,
+        custom_proposal: &[u8],
+    ) -> Option<CustomProposal> {
+        let result = kchat_mls::process_custom_proposal(custom_proposal);
+
+        result.map(|result| CustomProposal {
+            mls_client_id: result.mls_client_id,
+            mls_fingerprint: result.mls_fingerprint,
+            group_id: result.group_id,
+            proposal_type: result.proposal_type.to_string(),
+        })
+    }
+
     pub fn encrypt_message(&self, group_id: &str, message: &[u8]) -> Result<Vec<u8>, Error> {
         let provider = self.provider()?;
 
@@ -566,8 +684,9 @@ impl UqMls {
                 .build(),
             public_key,
         )?;
+        let conn = Connection::open(&self.group_storage_path)?;
         let _ = insert_or_update_group_status(
-            &self.group_storage_path,
+            &conn,
             group_id,
             GroupPendingOperation::JoinByExternalCommit,
         );
@@ -592,6 +711,7 @@ impl UqMls {
             ))
             .build();
 
+        let conn = Connection::open(&self.group_storage_path)?;
         Ok(args
             .iter()
             .map(|arg| {
@@ -605,7 +725,7 @@ impl UqMls {
                 ) {
                     Ok(result) => {
                         let _ = insert_or_update_group_status(
-                            &self.group_storage_path,
+                            &conn,
                             &arg.group_id,
                             GroupPendingOperation::JoinByExternalCommit,
                         );
@@ -637,11 +757,8 @@ impl UqMls {
         let provider = self.provider()?;
 
         let result = core::update_leaf_node(&provider, group_id)?;
-        let _ = insert_or_update_group_status(
-            &self.group_storage_path,
-            group_id,
-            GroupPendingOperation::UpdateTree,
-        );
+        let conn = Connection::open(&self.group_storage_path)?;
+        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::UpdateTree);
 
         Ok(result.into())
     }
@@ -650,11 +767,8 @@ impl UqMls {
         let provider = self.provider()?;
 
         core::merge_pending_commit(&provider, group_id)?;
-        let _ = insert_or_update_group_status(
-            &self.group_storage_path,
-            group_id,
-            GroupPendingOperation::None,
-        );
+        let conn = Connection::open(&self.group_storage_path)?;
+        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
 
         Ok(())
     }
@@ -663,11 +777,8 @@ impl UqMls {
         let provider = self.provider()?;
 
         core::clear_pending_commit(&provider, group_id)?;
-        let _ = insert_or_update_group_status(
-            &self.group_storage_path,
-            group_id,
-            GroupPendingOperation::None,
-        );
+        let conn = Connection::open(&self.group_storage_path)?;
+        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
 
         Ok(())
     }
@@ -676,11 +787,8 @@ impl UqMls {
         let provider = self.provider()?;
 
         core::clear_pending_proposals(&provider, group_id)?;
-        let _ = insert_or_update_group_status(
-            &self.group_storage_path,
-            group_id,
-            GroupPendingOperation::None,
-        );
+        let conn = Connection::open(&self.group_storage_path)?;
+        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
 
         Ok(())
     }
@@ -703,8 +811,8 @@ impl UqMls {
 
     pub fn group_epoch(&self, group_id: &str) -> Result<WrappedGroupEpochResult, Error> {
         let provider = self.provider()?;
-        let pending_operation =
-            get_group_pending_operation(&self.group_storage_path, group_id).unwrap_or(None);
+        let conn = Connection::open(&self.group_storage_path)?;
+        let pending_operation = get_group_pending_operation(&conn, group_id).unwrap_or(None);
 
         Ok(match core::group(&provider, group_id) {
             Ok(group) => WrappedGroupEpochResult {
@@ -731,12 +839,13 @@ impl UqMls {
         group_ids: &[String],
     ) -> Result<Vec<WrappedGroupEpochResult>, Error> {
         let provider = self.provider()?;
+        let conn = Connection::open(&self.group_storage_path)?;
 
         Ok(group_ids
             .iter()
             .map(|group_id| {
                 let pending_operation =
-                    get_group_pending_operation(&self.group_storage_path, group_id).unwrap_or(None);
+                    get_group_pending_operation(&conn, group_id).unwrap_or(None);
                 match core::group(&provider, group_id) {
                     Ok(group) => WrappedGroupEpochResult {
                         group_id: group_id.to_owned(),
@@ -761,7 +870,8 @@ impl UqMls {
 
     pub fn delete_group(&self, group_id: &str) -> Result<(), Error> {
         let provider = self.provider()?;
-        let _ = delete_group_status(&self.group_storage_path, group_id);
+        let conn = Connection::open(&self.group_storage_path)?;
+        let _ = delete_group_status(&conn, group_id);
 
         Ok(core::delete_group(&provider, group_id)?)
     }
@@ -793,8 +903,9 @@ impl UqMls {
     ) -> Result<ProcessAllMessagesResult, Error> {
         let provider = self.provider()?;
 
+        let conn = Connection::open(&self.group_storage_path)?;
         let result = process_all_messages(
-            &self.group_storage_path,
+            &conn,
             &provider,
             kchat_mls::ProcessAllMessagesArgs {
                 group_messages: args
@@ -832,9 +943,59 @@ impl UqMls {
                 .iter()
                 .map(|group_result| GroupResult {
                     group_id: group_result.group_id.to_owned(),
-                    members_to_remove: group_result.members_to_remove.clone(),
+                    members_to_remove: group_result
+                        .members_to_remove
+                        .iter()
+                        .map(|member| MemberInfo {
+                            mls_client_id: member.mls_client_id.to_owned(),
+                            mls_fingerprint: member.mls_fingerprint.to_owned(),
+                        })
+                        .collect(),
+                    members_to_readd: group_result
+                        .members_to_readd
+                        .iter()
+                        .map(|member| MemberInfo {
+                            mls_client_id: member.mls_client_id.to_owned(),
+                            mls_fingerprint: member.mls_fingerprint.to_owned(),
+                        })
+                        .collect(),
                 })
                 .collect(),
+            deleted_groups: result.deleted_groups,
         })
+    }
+
+    pub fn get_pending_creation_groups(&self) -> Result<GetPendingCreationGroupsResult, Error> {
+        let provider = self.provider()?;
+        let conn = Connection::open(&self.group_storage_path)?;
+
+        let result = kchat_mls::get_pending_creation_groups(&conn, &provider)?;
+
+        Ok(GetPendingCreationGroupsResult {
+            group_ids: result.group_ids,
+        })
+    }
+
+    pub fn process_pending_creations(
+        &self,
+        args: ProcessPendingCreationsArgs,
+    ) -> Result<(), Error> {
+        let provider = self.provider()?;
+        let conn = Connection::open(&self.group_storage_path)?;
+
+        Ok(kchat_mls::process_pending_creations(
+            &conn,
+            &provider,
+            kchat_mls::ProcessPendingCreationsArgs {
+                groups: args
+                    .groups
+                    .iter()
+                    .map(|group_data| kchat_mls::PendingCreationGroup {
+                        group_id: group_data.group_id.to_owned(),
+                        group_info: group_data.group_info.to_owned(),
+                    })
+                    .collect(),
+            },
+        )?)
     }
 }

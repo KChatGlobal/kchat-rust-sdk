@@ -84,6 +84,12 @@ pub enum Error {
     ExternalCommitBuilderFinalize(String),
     #[error("Create commit error: {0}")]
     CreateCommit(String),
+    #[error("Re-add error: {0}")]
+    ReAdd(String),
+    #[error("Commit build stage error: {0}")]
+    CommitBuilderStage(String),
+    #[error("Proposal error: {0}")]
+    Proposal(String),
 }
 
 impl From<openmls::prelude::Error> for Error {
@@ -248,5 +254,23 @@ where
 {
     fn from(err: openmls::group::ExternalCommitBuilderFinalizeError<T>) -> Self {
         Self::ExternalCommitBuilderFinalize(err.to_string())
+    }
+}
+
+impl<T> From<openmls::group::CommitBuilderStageError<T>> for Error
+where
+    T: std::fmt::Display,
+{
+    fn from(err: openmls::group::CommitBuilderStageError<T>) -> Self {
+        Self::CommitBuilderStage(err.to_string())
+    }
+}
+
+impl<T> From<openmls::group::ProposalError<T>> for Error
+where
+    T: std::fmt::Display,
+{
+    fn from(err: openmls::group::ProposalError<T>) -> Self {
+        Self::Proposal(err.to_string())
     }
 }

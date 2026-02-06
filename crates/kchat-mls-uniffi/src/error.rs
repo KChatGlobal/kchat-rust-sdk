@@ -86,6 +86,14 @@ pub enum Error {
     ExternalCommitBuilderFinalize(String),
     #[error("Create commit error: {0}")]
     CreateCommit(String),
+    #[error("Export secret error: {0}")]
+    ExportSecret(String),
+    #[error("Re-add error: {0}")]
+    ReAdd(String),
+    #[error("Commit builder stage error: {0}")]
+    CommitBuilderStage(String),
+    #[error("Proposal error: {0}")]
+    Proposal(String),
 }
 
 impl From<String> for Error {
@@ -138,6 +146,9 @@ impl From<MlsError> for Error {
             MlsError::ExternalCommitBuilder(e) => Self::ExternalCommitBuilder(e),
             MlsError::ExternalCommitBuilderFinalize(e) => Self::ExternalCommitBuilderFinalize(e),
             MlsError::CreateCommit(e) => Self::CreateCommit(e),
+            MlsError::ReAdd(e) => Self::ReAdd(e),
+            MlsError::CommitBuilderStage(e) => Self::CommitBuilderStage(e),
+            MlsError::Proposal(e) => Self::Proposal(e),
         }
     }
 }

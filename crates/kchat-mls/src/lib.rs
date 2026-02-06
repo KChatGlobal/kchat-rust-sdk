@@ -5,9 +5,10 @@ use std::{
 
 use openmls::{
     group::{MlsGroup, MlsGroupJoinConfig},
-    prelude::{BasicCredential, Credential},
+    prelude::{BasicCredential, Credential, group_info::GroupInfo, tls_codec::Deserialize as _},
 };
 use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 use uq_openmls::{
     core::{
         Proposal, clear_pending_commit, delete_group, group, merge_pending_commit,
@@ -94,12 +95,32 @@ impl Into<String> for GroupPendingOperation {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CustomProposal {
+    pub mls_client_id: String,
+    pub mls_fingerprint: String,
+    pub group_id: String,
+    pub proposal_type: CustomProposalType,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq)]
+pub enum CustomProposalType {
+    ReAdd,
+}
+
+impl ToString for CustomProposalType {
+    fn to_string(&self) -> String {
+        match self {
+            CustomProposalType::ReAdd => "ReAdd".to_owned(),
+        }
+    }
+}
+
 pub fn insert_or_update_group_status(
-    group_storage_path: &str,
+    conn: &Connection,
     group_id: &str,
     pending_operation: GroupPendingOperation,
 ) -> Result<(), Error> {
-    let conn = Connection::open(group_storage_path)?;
     let pending_operation: String = pending_operation.into();
 
     conn.execute(
@@ -114,9 +135,7 @@ pub fn insert_or_update_group_status(
     Ok(())
 }
 
-pub fn delete_group_status(group_storage_path: &str, group_id: &str) -> Result<(), Error> {
-    let conn = Connection::open(group_storage_path)?;
-
+pub fn delete_group_status(conn: &Connection, group_id: &str) -> Result<(), Error> {
     conn.execute(
         "DELETE FROM group_statuses WHERE group_id = ?1",
         params![group_id],
@@ -126,11 +145,9 @@ pub fn delete_group_status(group_storage_path: &str, group_id: &str) -> Result<(
 }
 
 pub fn get_group_pending_operation(
-    group_storage_path: &str,
+    conn: &Connection,
     group_id: &str,
 ) -> Result<Option<String>, Error> {
-    let conn = Connection::open(group_storage_path)?;
-
     let mut stmt =
         conn.prepare("SELECT group_id, pending_operation FROM group_statuses WHERE group_id = ?1")?;
 
@@ -143,9 +160,7 @@ pub fn get_group_pending_operation(
     }
 }
 
-pub fn initialize(group_storage_path: &str) -> Result<(), Error> {
-    let conn = Connection::open(group_storage_path)?;
-
+pub fn initialize(conn: &Connection) -> Result<(), Error> {
     conn.execute(
         "
         CREATE TABLE IF NOT EXISTS group_statuses (
@@ -161,21 +176,30 @@ pub fn initialize(group_storage_path: &str) -> Result<(), Error> {
 
 pub struct GroupResult {
     pub group_id: String,
-    pub members_to_remove: Vec<String>,
+    pub members_to_remove: Vec<MemberInfo>,
+    pub members_to_readd: Vec<MemberInfo>,
+}
+
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct MemberInfo {
+    pub mls_client_id: String,
+    pub mls_fingerprint: String,
 }
 
 pub struct ProcessAllMessagesResult {
     pub group_results: Vec<GroupResult>,
+    pub deleted_groups: Vec<String>,
 }
 
 pub fn process_all_messages(
-    group_storage_path: &str,
+    conn: &Connection,
     provider: &SqliteProvider,
     args: ProcessAllMessagesArgs,
     join_config: &MlsGroupJoinConfig,
 ) -> Result<ProcessAllMessagesResult, Error> {
     let mut result = ProcessAllMessagesResult {
         group_results: Vec::new(),
+        deleted_groups: Vec::new(),
     };
 
     for messages_of_group in args.group_messages {
@@ -186,7 +210,7 @@ pub fn process_all_messages(
             };
 
             let mut pending_operation: GroupPendingOperation =
-                get_group_pending_operation(group_storage_path, group_id)?.into();
+                get_group_pending_operation(&conn, group_id)?.into();
             if group.epoch().as_u64() == 0 {
                 pending_operation = GroupPendingOperation::CreateGroup;
             }
@@ -202,20 +226,19 @@ pub fn process_all_messages(
                     if let Some(msg) = first_message {
                         if !own_member_id.contains(&msg.sender) {
                             delete_group(provider, group_id)?;
-                            let _ = delete_group_status(group_storage_path, group_id);
+                            result.deleted_groups.push(group_id.to_owned());
+                            let _ = delete_group_status(&conn, group_id);
                         } else {
                             merge_pending_commit(provider, group_id)?;
                         }
                     } else {
                         delete_group(provider, group_id)?;
-                        let _ = delete_group_status(group_storage_path, group_id);
+                        result.deleted_groups.push(group_id.to_owned());
+                        let _ = delete_group_status(&conn, group_id);
                     }
 
-                    let _ = insert_or_update_group_status(
-                        group_storage_path,
-                        group_id,
-                        GroupPendingOperation::None,
-                    );
+                    let _ =
+                        insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
                 }
                 GroupPendingOperation::LeaveGroup => {
                     // TODO: handle leave group
@@ -231,34 +254,22 @@ pub fn process_all_messages(
                         clear_pending_commit(provider, group_id)?;
                     }
 
-                    let _ = insert_or_update_group_status(
-                        group_storage_path,
-                        group_id,
-                        GroupPendingOperation::None,
-                    );
+                    let _ =
+                        insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
                 }
                 GroupPendingOperation::None => (),
-            }
-
-            // check if first or second message is a welcome and that is the very first epoch
-            // then check if that welcome is for current user
-            // if that is for current user then delete current group then process welcome
-            if let Some(welcome_message) = get_first_welcome(&messages_of_group) {
-                if group.epoch().as_u64() < welcome_message.epoch {
-                    if let Err(err) = process_welcome(provider, &welcome_message.blob, join_config)
-                    {
-                        if let Error::WelcomeGroupAlreadyExisted = err {
-                            delete_group(provider, group_id)?;
-                            let _ = delete_group_status(group_storage_path, group_id);
-                        }
-                    }
-                }
             }
         }
 
         let mut members_to_remove_hashmap = HashMap::new();
+        let mut members_to_readd = HashSet::new();
 
+        let mut lastest_epoch = 0;
         for msg in &messages_of_group.messages {
+            if msg.epoch > lastest_epoch && msg.message_type == MessageType::Commit {
+                lastest_epoch = msg.epoch;
+            }
+
             match msg.message_type {
                 MessageType::Proposal => {
                     if let Ok(proposal) = process_proposal_message(provider, group_id, &msg.blob) {
@@ -271,10 +282,17 @@ pub fn process_all_messages(
                             }
                         }
 
-                        if group_member_set.contains(&proposal.sender) {
-                            if let Proposal::Remove = proposal.proposal {
-                                members_to_remove_hashmap.insert(proposal.sender, msg.epoch);
-                            }
+                        if group_member_set.contains(&proposal.sender)
+                            && proposal.proposal == Proposal::Remove
+                        {
+                            // members_to_remove_hashmap.insert(proposal.sender, msg.epoch);
+                            members_to_remove_hashmap.insert(
+                                MemberInfo {
+                                    mls_client_id: proposal.sender,
+                                    mls_fingerprint: msg.sender.to_owned(),
+                                },
+                                msg.epoch,
+                            );
                         }
                     }
                 }
@@ -286,16 +304,28 @@ pub fn process_all_messages(
             match msg.message_type {
                 MessageType::Welcome => {
                     if let Err(err) = process_welcome(provider, &msg.blob, join_config) {
-                        println!("process welcome error: {:?}", err.to_string());
+                        println!(
+                            "process welcome error, group {:?}: {:?}",
+                            group_id,
+                            err.to_string()
+                        );
                     }
                 }
                 MessageType::Commit => {
                     if let Err(err) = process_operation_message(provider, group_id, &msg.blob) {
-                        println!("process commit error: {:?}", err.to_string());
+                        println!(
+                            "process commit error, group {:?}: {:?}",
+                            group_id,
+                            err.to_string()
+                        );
                     }
 
                     let mut already_remove_members = Vec::new();
-                    for (need_remove_member_id, epoch) in members_to_remove_hashmap.iter() {
+                    for (member_info, epoch) in members_to_remove_hashmap.iter() {
+                        let MemberInfo {
+                            mls_client_id: need_remove_member_id,
+                            ..
+                        } = &member_info;
                         if msg.epoch >= *epoch {
                             let mut group_member_set = HashSet::new();
                             if let Ok(group) = group(provider, group_id) {
@@ -307,7 +337,7 @@ pub fn process_all_messages(
                             }
 
                             if !group_member_set.contains(need_remove_member_id) {
-                                already_remove_members.push(need_remove_member_id.to_owned());
+                                already_remove_members.push(member_info.to_owned());
                             }
                         }
                     }
@@ -316,7 +346,19 @@ pub fn process_all_messages(
                         members_to_remove_hashmap.remove(&member_id);
                     }
                 }
-                _ => (),
+                MessageType::Proposal => {
+                    if let Some(custom_proposal) = process_custom_proposal(&msg.blob) {
+                        if custom_proposal.proposal_type == CustomProposalType::ReAdd
+                            && msg.epoch > lastest_epoch
+                        {
+                            // members_to_readd.insert(custom_proposal.mls_client_id);
+                            members_to_readd.insert(MemberInfo {
+                                mls_client_id: custom_proposal.mls_client_id,
+                                mls_fingerprint: msg.sender.to_owned(),
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -327,10 +369,112 @@ pub fn process_all_messages(
                 .into_iter()
                 .map(|member_id| member_id.to_owned())
                 .collect(),
+            members_to_readd: members_to_readd
+                .into_iter()
+                .map(|member_id| member_id.to_owned())
+                .collect(),
         });
     }
 
     Ok(result)
+}
+
+pub struct CreateCustomProposalArgs {
+    pub mls_fingerprint: String,
+    pub custom_proposal_type: CustomProposalType,
+}
+
+pub fn create_custom_proposal(
+    mls_client_id: &str,
+    group_id: &str,
+    request: CreateCustomProposalArgs,
+) -> Vec<u8> {
+    serde_json::to_vec(&CustomProposal {
+        mls_client_id: mls_client_id.to_owned(),
+        mls_fingerprint: request.mls_fingerprint.to_owned(),
+        group_id: group_id.to_owned(),
+        proposal_type: request.custom_proposal_type,
+    })
+    .unwrap_or_default()
+}
+
+pub fn process_custom_proposal(custom_proposal: &[u8]) -> Option<CustomProposal> {
+    serde_json::from_slice::<CustomProposal>(custom_proposal).ok()
+}
+
+pub struct GetPendingCreationGroupsResult {
+    pub group_ids: Vec<String>,
+}
+
+// Note: only get pending creation groups without add members
+pub fn get_pending_creation_groups(
+    conn: &Connection,
+    provider: &SqliteProvider,
+) -> Result<GetPendingCreationGroupsResult, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT group_id, pending_operation FROM group_statuses WHERE pending_operation = ?1",
+    )?;
+
+    let mut rows = stmt.query(params![OP_CREATE_GROUP])?;
+    let mut group_ids = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        let group_id: String = row.get(0)?;
+
+        if let Ok(group) = group(provider, &group_id) {
+            if group.epoch().as_u64() == 0 {
+                group_ids.push(group_id);
+            }
+        }
+    }
+
+    Ok(GetPendingCreationGroupsResult { group_ids })
+}
+
+pub struct ProcessPendingCreationsArgs {
+    pub groups: Vec<PendingCreationGroup>,
+}
+
+pub struct PendingCreationGroup {
+    pub group_id: String,
+    pub group_info: Vec<u8>,
+}
+
+// Note: only process pending creation groups without add members
+pub fn process_pending_creations(
+    conn: &Connection,
+    provider: &SqliteProvider,
+    args: ProcessPendingCreationsArgs,
+) -> Result<(), Error> {
+    for group_data in args.groups {
+        let Ok(group) = group(provider, &group_data.group_id) else {
+            continue;
+        };
+        if group.epoch().as_u64() > 0 {
+            continue;
+        }
+
+        let Ok(group_info) = GroupInfo::tls_deserialize_exact(&group_data.group_info) else {
+            continue;
+        };
+        let Ok(pending_operation) = get_group_pending_operation(conn, &group_data.group_id) else {
+            continue;
+        };
+        if pending_operation == Some(OP_CREATE_GROUP.to_string()) && group.epoch().as_u64() == 0 {
+            if !group
+                .tree_hash()
+                .to_vec()
+                .iter()
+                .eq(group_info.group_context().tree_hash())
+            {
+                delete_group(provider, &group_data.group_id)?;
+            }
+
+            let _ = delete_group_status(conn, &group_data.group_id);
+        }
+    }
+
+    Ok(())
 }
 
 fn get_first_message(
@@ -344,23 +488,6 @@ fn get_first_message(
 
     for message in &messages_of_group.messages {
         if message.epoch == group_epoch + 1 && message.message_type == MessageType::Commit {
-            return Some(message);
-        }
-    }
-
-    None
-}
-
-fn get_first_welcome(messages_of_group: &AllMessagesOfGroupArgs) -> Option<&MlsMessage> {
-    let mut first_epoch = u64::MAX;
-
-    for message in &messages_of_group.messages {
-        if message.epoch > first_epoch {
-            break;
-        }
-
-        first_epoch = message.epoch;
-        if message.message_type == MessageType::Welcome {
             return Some(message);
         }
     }

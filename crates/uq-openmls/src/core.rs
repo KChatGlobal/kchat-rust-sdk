@@ -6,8 +6,9 @@ use openmls::{
     messages::proposals::Proposal as MlsProposal,
     prelude::{
         BasicCredential, Capabilities, Ciphersuite, ExtensionType, KeyPackage, KeyPackageIn,
-        LeafNodeIndex, LeafNodeParameters, MlsMessageBodyIn, MlsMessageBodyOut, MlsMessageIn,
-        ProcessedMessageContent, Proposal as OpenMlsProposal, ProtocolVersion, Sender,
+        LeafNodeIndex, LeafNodeParameters, Lifetime, MlsMessageBodyIn, MlsMessageBodyOut,
+        MlsMessageIn, ProcessedMessageContent, Proposal as OpenMlsProposal, ProtocolVersion,
+        Sender,
         group_info::VerifiableGroupInfo,
         tls_codec::{Deserialize as _, Serialize as _},
     },
@@ -39,6 +40,10 @@ pub fn generate_signature_key<Provider: OpenMlsProvider>(
     Ok(signer)
 }
 
+/// This value is used as the default lifetime if no default  lifetime is configured.
+/// The value is in seconds and amounts to 36 * 28 Days, i.e. about 36 months.
+const DEFAULT_KEY_PACKAGE_LIFETIME_SECONDS: u64 = 60 * 60 * 24 * 28 * 36;
+
 /// Generate new key package for the given identity.
 pub fn generate_key_package<Provider: OpenMlsProvider>(
     user_id: &str,
@@ -61,6 +66,7 @@ pub fn generate_key_package<Provider: OpenMlsProvider>(
                 None,
                 None,
             ))
+            .key_package_lifetime(Lifetime::new(DEFAULT_KEY_PACKAGE_LIFETIME_SECONDS))
             .mark_as_last_resort();
     }
 
@@ -172,17 +178,6 @@ pub fn process_welcome<Provider: OpenMlsProvider>(
     };
 
     let staged_welcome = StagedWelcome::new_from_welcome(provider, config, welcome, None)?;
-
-    let group = MlsGroup::load(
-        provider.storage(),
-        staged_welcome.group_context().group_id(),
-    )
-    .map_err(|e| Error::Storage(e.to_string()))?;
-    if let Some(group) = group {
-        if group.is_active() {
-            return Err(Error::WelcomeGroupAlreadyExisted);
-        }
-    }
 
     Ok(staged_welcome.into_group(provider)?)
 }
@@ -795,4 +790,87 @@ pub fn delete_group<Provider: OpenMlsProvider>(
     group
         .delete(provider.storage())
         .map_err(|e| Error::Storage(e.to_string()))
+}
+
+#[derive(Debug)]
+pub struct ReAddResult {
+    pub welcome: Option<Vec<u8>>,
+    pub commit: Vec<u8>,
+    pub group_info: Option<Vec<u8>>,
+    pub current_epoch: u64,
+}
+
+/// Re-add
+pub fn readd<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+    member_ids: &[&str],
+    key_package_ins: &[Vec<u8>],
+) -> Result<ReAddResult, Error> {
+    let Some(mut group) = MlsGroup::load(
+        provider.storage(),
+        &GroupId::from_slice(group_id.as_bytes()),
+    )
+    .map_err(|e| Error::Storage(e.to_string()))?
+    else {
+        return Err(Error::GroupIsNotExisted);
+    };
+    let signer = get_own_signature_key_from_group(&group, provider)?;
+
+    let member_identities: Vec<&[u8]> = member_ids.iter().map(|id| id.as_bytes()).collect();
+    let member_leaf_node_indices = find_members_by_identity(
+        &group.members().collect::<Vec<Member>>(),
+        &member_identities,
+    )
+    .into_iter()
+    .map(|member| member.index.u32())
+    .collect::<Vec<u32>>();
+
+    let mut our_partition = Vec::new();
+    for member in group.members() {
+        if !member_leaf_node_indices.contains(&member.index.u32()) {
+            our_partition.push(member.index);
+        }
+    }
+
+    let builder = group
+        .recover_fork_by_readding(&our_partition)
+        .map_err(|e| Error::ReAdd(e.to_string()))?;
+
+    let mut key_packages = Vec::new();
+    for bytes in key_package_ins {
+        let key_package = KeyPackageIn::tls_deserialize_exact(bytes)?
+            .validate(provider.crypto(), ProtocolVersion::default())?;
+        key_packages.push(key_package);
+    }
+
+    let readd_messages = builder
+        .provide_key_packages(key_packages)
+        .create_group_info(true)
+        .load_psks(provider.storage())?
+        .build(provider.rand(), provider.crypto(), &signer, |_| true)?
+        .stage_commit(provider)?;
+
+    let (commit, welcome, group_info) = readd_messages.clone().into_messages();
+    let welcome = if let Some(welcome) = welcome {
+        Some(welcome.tls_serialize_detached()?)
+    } else {
+        None
+    };
+    let group_info = if let Some(group_info) = group_info {
+        if let MlsMessageBodyOut::GroupInfo(group_info) = group_info.body() {
+            Some(group_info.tls_serialize_detached()?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok(ReAddResult {
+        welcome,
+        commit: commit.tls_serialize_detached()?,
+        group_info,
+        current_epoch: group.epoch().as_u64(),
+    })
 }

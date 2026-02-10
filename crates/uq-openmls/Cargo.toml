@@ -1,15 +1,15 @@
 [package]
 name = "uq-openmls"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["KChat Authors"]
 
 [dependencies]
-openmls = { version = "0.7.1", features = ["fork-resolution"] }
-openmls_basic_credential = { version = "0.4.0" }
-openmls_traits = { version = "0.4.1" }
-openmls_rust_crypto = { version =  "0.4.1" }
-openmls_sqlite_storage = { version = "0.1.1", default-features = false }
+openmls = { workspace = true, features = ["fork-resolution"] }
+openmls_basic_credential = { workspace = true }
+openmls_traits = { workspace = true }
+openmls_rust_crypto = { workspace = true }
+openmls_sqlite_storage = { workspace = true, default-features = false }
 
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
 serde = { workspace = true }
@@ -18,5 +18,5 @@ thiserror = { workspace = true }
 secrecy = { workspace = true }
 
 [dev-dependencies]
-openmls = { version = "0.7.1", features = ["test-utils"] }
+openmls = { workspace = true, features = ["fork-resolution", "test-utils"] }
 criterion = { workspace = true }

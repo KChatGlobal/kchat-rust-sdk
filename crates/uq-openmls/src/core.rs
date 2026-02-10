@@ -177,7 +177,9 @@ pub fn process_welcome<Provider: OpenMlsProvider>(
         return Err(Error::InvalidWelcomeMessage);
     };
 
-    let staged_welcome = StagedWelcome::new_from_welcome(provider, config, welcome, None)?;
+    let staged_welcome = StagedWelcome::build_from_welcome(provider, config, welcome)?
+        .replace_old_group()
+        .build()?;
 
     Ok(staged_welcome.into_group(provider)?)
 }
@@ -694,7 +696,6 @@ impl From<&MlsProposal> for Proposal {
             OpenMlsProposal::ReInit(_) => Self::ReInit,
             OpenMlsProposal::ExternalInit(_) => Self::ExternalInit,
             OpenMlsProposal::GroupContextExtensions(_) => Self::GroupContextExtensions,
-            OpenMlsProposal::AppAck(_) => Self::AppAck,
             OpenMlsProposal::SelfRemove => Self::SelfRemove,
             OpenMlsProposal::Custom(_) => Self::Custom,
         }
@@ -846,7 +847,6 @@ pub fn readd<Provider: OpenMlsProvider>(
 
     let readd_messages = builder
         .provide_key_packages(key_packages)
-        .create_group_info(true)
         .load_psks(provider.storage())?
         .build(provider.rand(), provider.crypto(), &signer, |_| true)?
         .stage_commit(provider)?;

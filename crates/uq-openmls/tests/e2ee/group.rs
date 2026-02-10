@@ -649,57 +649,6 @@ fn test_update_leaf_node() {
 }
 
 #[test]
-fn test_process_welcome_from_group_with_same_group_id_with_existed_group() {
-    let members = init_members(&["alice", "bob"]);
-    let (alice_id, alice_provider, _) = &members[0];
-    let (bob_id, bob_provider, bob_key_package) = &members[1];
-
-    let group_id = "group_1";
-    // Alice create group 1
-    create_group(
-        alice_provider,
-        alice_id,
-        group_id,
-        DEFAULT_CIPHERSUITE,
-        &MlsGroupCreateConfig::builder()
-            .ciphersuite(DEFAULT_CIPHERSUITE)
-            .use_ratchet_tree_extension(true)
-            .build(),
-        None,
-    )
-    .expect("Alice should create group success");
-
-    // Bob create group 1
-    create_group(
-        bob_provider,
-        bob_id,
-        group_id,
-        DEFAULT_CIPHERSUITE,
-        &MlsGroupCreateConfig::builder()
-            .ciphersuite(DEFAULT_CIPHERSUITE)
-            .use_ratchet_tree_extension(true)
-            .build(),
-        None,
-    )
-    .expect("Bob should create group success");
-
-    // Alice add bob to local group
-    let result = add_members(alice_provider, group_id, &[bob_key_package.clone()])
-        .expect("Alice should add Bob to local group successfully.");
-
-    // Bob process welcome from Alice
-    let result = process_welcome(
-        bob_provider,
-        &result.welcome,
-        &MlsGroupJoinConfig::builder()
-            .use_ratchet_tree_extension(true)
-            .build(),
-    );
-
-    assert!(matches!(result, Err(Error::WelcomeGroupAlreadyExisted)));
-}
-
-#[test]
 fn test_readd() {
     // Init alice device.
     let alice_provider = OpenMlsRustCrypto::default();

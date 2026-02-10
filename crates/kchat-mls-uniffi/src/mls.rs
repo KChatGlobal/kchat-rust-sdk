@@ -1,13 +1,13 @@
 use kchat_mls::{
-    CreateCustomProposalArgs, GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT,
     create_custom_proposal, delete_group_status, get_group_pending_operation, initialize,
-    insert_or_update_group_status, process_all_messages,
+    insert_or_update_group_status, process_all_messages, CreateCustomProposalArgs,
+    GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT,
 };
 use openmls::{
     group::{
+        MlsGroupCreateConfig, MlsGroupJoinConfig, WireFormatPolicy as OpenMlsWireFormatPolicy,
         MIXED_CIPHERTEXT_WIRE_FORMAT_POLICY, MIXED_PLAINTEXT_WIRE_FORMAT_POLICY,
-        MlsGroupCreateConfig, MlsGroupJoinConfig, PURE_CIPHERTEXT_WIRE_FORMAT_POLICY,
-        PURE_PLAINTEXT_WIRE_FORMAT_POLICY, WireFormatPolicy as OpenMlsWireFormatPolicy,
+        PURE_CIPHERTEXT_WIRE_FORMAT_POLICY, PURE_PLAINTEXT_WIRE_FORMAT_POLICY,
     },
     prelude::{BasicCredential, Ciphersuite, SenderRatchetConfiguration},
 };

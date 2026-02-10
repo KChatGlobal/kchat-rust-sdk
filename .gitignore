@@ -23,5 +23,6 @@ flamegraph.svg
 # Generated files
 generated/
 ios/
+ios.zip
 android/
 android.zip

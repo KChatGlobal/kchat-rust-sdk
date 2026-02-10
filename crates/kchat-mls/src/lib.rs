@@ -5,7 +5,7 @@ use std::{
 
 use openmls::{
     group::{MlsGroup, MlsGroupJoinConfig},
-    prelude::{BasicCredential, Credential, group_info::GroupInfo, tls_codec::Deserialize as _},
+    prelude::{BasicCredential, Credential},
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -437,7 +437,16 @@ pub struct ProcessPendingCreationsArgs {
 
 pub struct PendingCreationGroup {
     pub group_id: String,
-    pub group_info: Vec<u8>,
+    pub tree_hash: Vec<u8>,
+}
+
+pub struct ProcessPendingCreationsResult {
+    pub groups: Vec<PendingCreationGroupResult>,
+}
+
+pub struct PendingCreationGroupResult {
+    pub group_id: String,
+    pub err: Option<String>,
 }
 
 // Note: only process pending creation groups without add members
@@ -445,36 +454,47 @@ pub fn process_pending_creations(
     conn: &Connection,
     provider: &SqliteProvider,
     args: ProcessPendingCreationsArgs,
-) -> Result<(), Error> {
+) -> Result<ProcessPendingCreationsResult, Error> {
+    let mut results = Vec::new();
+
     for group_data in args.groups {
-        let Ok(group) = group(provider, &group_data.group_id) else {
-            continue;
-        };
-        if group.epoch().as_u64() > 0 {
-            continue;
-        }
+        match group(provider, &group_data.group_id) {
+            Ok(group) => {
+                if group.epoch().as_u64() > 0 {
+                    results.push(PendingCreationGroupResult {
+                        group_id: group_data.group_id.to_owned(),
+                        err: Some("Group epoch > 0".to_owned()),
+                    });
+                    continue;
+                }
 
-        let Ok(group_info) = GroupInfo::tls_deserialize_exact(&group_data.group_info) else {
-            continue;
-        };
-        let Ok(pending_operation) = get_group_pending_operation(conn, &group_data.group_id) else {
-            continue;
-        };
-        if pending_operation == Some(OP_CREATE_GROUP.to_string()) && group.epoch().as_u64() == 0 {
-            if !group
-                .tree_hash()
-                .to_vec()
-                .iter()
-                .eq(group_info.group_context().tree_hash())
-            {
-                delete_group(provider, &group_data.group_id)?;
+                let Ok(pending_operation) = get_group_pending_operation(conn, &group_data.group_id)
+                else {
+                    results.push(PendingCreationGroupResult {
+                        group_id: group_data.group_id.to_owned(),
+                        err: Some("Get pending operation error".to_owned()),
+                    });
+                    continue;
+                };
+
+                if pending_operation == Some(OP_CREATE_GROUP.to_string()) {
+                    if !group.tree_hash().to_vec().iter().eq(&group_data.tree_hash) {
+                        delete_group(provider, &group_data.group_id)?;
+                    }
+
+                    let _ = delete_group_status(conn, &group_data.group_id);
+                }
             }
-
-            let _ = delete_group_status(conn, &group_data.group_id);
+            Err(err) => {
+                results.push(PendingCreationGroupResult {
+                    group_id: group_data.group_id.to_owned(),
+                    err: Some(err.to_string()),
+                });
+            }
         }
     }
 
-    Ok(())
+    Ok(ProcessPendingCreationsResult { groups: results })
 }
 
 fn get_first_message(

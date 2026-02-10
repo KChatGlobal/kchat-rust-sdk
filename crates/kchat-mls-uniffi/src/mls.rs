@@ -307,6 +307,16 @@ impl From<core::PendingCommitResult> for PendingCommitResult {
 pub struct WrappedGroupEpochResult {
     pub group_id: String,
     pub epoch: i64,
+    pub tree_hash: Vec<u8>,
+    pub err: Option<String>,
+    pub pending_operation: Option<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct WrappedGroupContextResult {
+    pub group_id: String,
+    pub epoch: i64,
+    pub tree_hash: Vec<u8>,
     pub err: Option<String>,
     pub pending_operation: Option<String>,
 }
@@ -387,7 +397,33 @@ pub struct ProcessPendingCreationsArgs {
 #[derive(uniffi::Record)]
 pub struct PendingCreationGroup {
     pub group_id: String,
-    pub group_info: Vec<u8>,
+    pub tree_hash: Vec<u8>,
+}
+
+#[derive(uniffi::Record)]
+pub struct ProcessPendingCreationsResult {
+    groups: Vec<PendingCreationGroupResult>,
+}
+
+#[derive(uniffi::Record)]
+pub struct PendingCreationGroupResult {
+    pub group_id: String,
+    pub err: Option<String>,
+}
+
+impl From<kchat_mls::ProcessPendingCreationsResult> for ProcessPendingCreationsResult {
+    fn from(value: kchat_mls::ProcessPendingCreationsResult) -> Self {
+        Self {
+            groups: value
+                .groups
+                .iter()
+                .map(|group| PendingCreationGroupResult {
+                    group_id: group.group_id.to_owned(),
+                    err: group.err.to_owned(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[uniffi::export]
@@ -822,12 +858,41 @@ impl UqMls {
                 } else {
                     group.epoch().as_u64() as i64
                 },
+                tree_hash: group.tree_hash().to_vec(),
                 err: None,
                 pending_operation,
             },
             Err(err) => WrappedGroupEpochResult {
                 group_id: group_id.to_owned(),
                 epoch: -1,
+                tree_hash: Vec::new(),
+                err: Some(err.to_string()),
+                pending_operation: None,
+            },
+        })
+    }
+
+    pub fn group_context(&self, group_id: &str) -> Result<WrappedGroupContextResult, Error> {
+        let provider = self.provider()?;
+        let conn = Connection::open(&self.group_storage_path)?;
+        let pending_operation = get_group_pending_operation(&conn, group_id).unwrap_or(None);
+
+        Ok(match core::group(&provider, group_id) {
+            Ok(group) => WrappedGroupContextResult {
+                group_id: group_id.to_owned(),
+                epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
+                    group.epoch().as_u64() as i64 - 1
+                } else {
+                    group.epoch().as_u64() as i64
+                },
+                tree_hash: group.tree_hash().to_vec(),
+                err: None,
+                pending_operation,
+            },
+            Err(err) => WrappedGroupContextResult {
+                group_id: group_id.to_owned(),
+                epoch: -1,
+                tree_hash: Vec::new(),
                 err: Some(err.to_string()),
                 pending_operation: None,
             },
@@ -854,12 +919,50 @@ impl UqMls {
                         } else {
                             group.epoch().as_u64() as i64
                         },
+                        tree_hash: group.tree_hash().to_vec(),
                         err: None,
                         pending_operation,
                     },
                     Err(err) => WrappedGroupEpochResult {
                         group_id: group_id.to_owned(),
                         epoch: -1,
+                        tree_hash: Vec::new(),
+                        err: Some(err.to_string()),
+                        pending_operation: None,
+                    },
+                }
+            })
+            .collect())
+    }
+
+    pub fn group_contexts(
+        &self,
+        group_ids: &[String],
+    ) -> Result<Vec<WrappedGroupContextResult>, Error> {
+        let provider = self.provider()?;
+        let conn = Connection::open(&self.group_storage_path)?;
+
+        Ok(group_ids
+            .iter()
+            .map(|group_id| {
+                let pending_operation =
+                    get_group_pending_operation(&conn, group_id).unwrap_or(None);
+                match core::group(&provider, group_id) {
+                    Ok(group) => WrappedGroupContextResult {
+                        group_id: group_id.to_owned(),
+                        epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
+                            group.epoch().as_u64() as i64 - 1
+                        } else {
+                            group.epoch().as_u64() as i64
+                        },
+                        tree_hash: group.tree_hash().to_vec(),
+                        err: None,
+                        pending_operation,
+                    },
+                    Err(err) => WrappedGroupContextResult {
+                        group_id: group_id.to_owned(),
+                        epoch: -1,
+                        tree_hash: Vec::new(),
                         err: Some(err.to_string()),
                         pending_operation: None,
                     },
@@ -979,7 +1082,7 @@ impl UqMls {
     pub fn process_pending_creations(
         &self,
         args: ProcessPendingCreationsArgs,
-    ) -> Result<(), Error> {
+    ) -> Result<ProcessPendingCreationsResult, Error> {
         let provider = self.provider()?;
         let conn = Connection::open(&self.group_storage_path)?;
 
@@ -992,10 +1095,11 @@ impl UqMls {
                     .iter()
                     .map(|group_data| kchat_mls::PendingCreationGroup {
                         group_id: group_data.group_id.to_owned(),
-                        group_info: group_data.group_info.to_owned(),
+                        tree_hash: group_data.tree_hash.to_owned(),
                     })
                     .collect(),
             },
-        )?)
+        )?
+        .into())
     }
 }

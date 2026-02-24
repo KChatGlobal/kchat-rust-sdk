@@ -401,7 +401,33 @@ pub struct ProcessPendingCreationsArgs {
 #[napi(object)]
 pub struct PendingCreationGroup {
     pub group_id: String,
-    pub group_info: Vec<u8>,
+    pub tree_hash: Vec<u8>,
+}
+
+#[napi(object)]
+pub struct ProcessPendingCreationsResult {
+    pub groups: Vec<PendingCreationGroupResult>,
+}
+
+#[napi(object)]
+pub struct PendingCreationGroupResult {
+    pub group_id: String,
+    pub err: Option<String>,
+}
+
+impl From<kchat_mls::ProcessPendingCreationsResult> for ProcessPendingCreationsResult {
+    fn from(value: kchat_mls::ProcessPendingCreationsResult) -> Self {
+        Self {
+            groups: value
+                .groups
+                .iter()
+                .map(|group| PendingCreationGroupResult {
+                    group_id: group.group_id.to_owned(),
+                    err: group.err.to_owned(),
+                })
+                .collect(),
+        }
+    }
 }
 
 impl UqMls {
@@ -1108,9 +1134,10 @@ impl UqMls {
     pub fn process_pending_creations(
         &self,
         args: ProcessPendingCreationsArgs,
-    ) -> Result<(), Error> {
+    ) -> napi::Result<ProcessPendingCreationsResult> {
         let provider = self.provider()?;
-        let conn = Connection::open(&self.group_storage_path)?;
+        let conn =
+            Connection::open(&self.group_storage_path).map_err(|e| Error::Mls(e.to_string()))?;
 
         Ok(kchat_mls::process_pending_creations(
             &conn,
@@ -1121,10 +1148,12 @@ impl UqMls {
                     .iter()
                     .map(|group_data| kchat_mls::PendingCreationGroup {
                         group_id: group_data.group_id.to_owned(),
-                        group_info: group_data.group_info.to_owned(),
+                        tree_hash: group_data.tree_hash.to_owned(),
                     })
                     .collect(),
             },
-        )?)
+        )
+        .map_err(|e| Error::Mls(e.to_string()))?
+        .into())
     }
 }

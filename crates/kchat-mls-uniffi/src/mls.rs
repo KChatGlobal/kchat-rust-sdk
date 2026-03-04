@@ -1,13 +1,15 @@
+use std::sync::{Arc, Mutex};
+
 use kchat_mls::{
+    CreateCustomProposalArgs, GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT,
     create_custom_proposal, delete_group_status, get_group_pending_operation, initialize,
-    insert_or_update_group_status, process_all_messages, CreateCustomProposalArgs,
-    GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT,
+    insert_or_update_group_status, process_all_messages,
 };
 use openmls::{
     group::{
-        MlsGroupCreateConfig, MlsGroupJoinConfig, WireFormatPolicy as OpenMlsWireFormatPolicy,
         MIXED_CIPHERTEXT_WIRE_FORMAT_POLICY, MIXED_PLAINTEXT_WIRE_FORMAT_POLICY,
-        PURE_CIPHERTEXT_WIRE_FORMAT_POLICY, PURE_PLAINTEXT_WIRE_FORMAT_POLICY,
+        MlsGroupCreateConfig, MlsGroupJoinConfig, PURE_CIPHERTEXT_WIRE_FORMAT_POLICY,
+        PURE_PLAINTEXT_WIRE_FORMAT_POLICY, WireFormatPolicy as OpenMlsWireFormatPolicy,
     },
     prelude::{BasicCredential, Ciphersuite, SenderRatchetConfiguration},
 };
@@ -20,25 +22,25 @@ use uq_openmls::{
 
 use crate::error::Error;
 
+#[uniffi::export(with_foreign)]
+pub trait ProcessMessagesCallback: Send + Sync {
+    fn on_trigger(&self, log: String);
+}
+
 #[derive(uniffi::Object)]
 pub struct UqMls {
     client_id: String,
-    storage_path: String,
-    group_storage_path: String,
     ciphersuite: u16,
     wire_format_policy: WireFormatPolicy,
     use_ratchet_tree_extension: bool,
     max_past_epochs: u16,
-    secret: Option<SecretString>,
     out_of_order_tolerance: u32,
     maximum_forward_distance: u32,
+    conn: Arc<Mutex<Connection>>,
+    provider: SqliteProvider,
 }
 
 impl UqMls {
-    fn provider(&self) -> Result<SqliteProvider, Error> {
-        Ok(SqliteProvider::new(&self.storage_path, &self.secret)?)
-    }
-
     fn ciphersuite(&self) -> Result<Ciphersuite, Error> {
         Ok(Ciphersuite::try_from(self.ciphersuite)?)
     }
@@ -439,25 +441,24 @@ impl UqMls {
         maximum_forward_distance: u32,
     ) -> Result<UqMls, Error> {
         let secret = password.map(SecretString::from);
-        let conn = Connection::open(&group_storage_path)?;
+        let conn = Arc::new(Mutex::new(Connection::open(&group_storage_path)?));
         let _ = initialize(&conn);
 
         Ok(UqMls {
             client_id,
-            storage_path,
-            group_storage_path,
             ciphersuite: DEFAULT_CIPHERSUITE.into(),
             wire_format_policy: WireFormatPolicy::PureCiphertext,
             use_ratchet_tree_extension: true,
             max_past_epochs,
-            secret,
             out_of_order_tolerance,
             maximum_forward_distance,
+            conn,
+            provider: SqliteProvider::new(&storage_path, &secret)?,
         })
     }
 
     pub fn generate_signature_key(&self) -> Result<SignaturePublicKey, Error> {
-        let signer = core::generate_signature_key(&self.provider()?, self.ciphersuite()?)?;
+        let signer = core::generate_signature_key(&self.provider, self.ciphersuite()?)?;
 
         Ok(SignaturePublicKey {
             public: signer.public().to_vec(),
@@ -471,13 +472,11 @@ impl UqMls {
         last_resort: bool,
         public_key: Option<Vec<u8>>,
     ) -> Result<GenerateKeyPackagesResult, Error> {
-        let provider = self.provider()?;
-
         let mut result = GenerateKeyPackagesResult::default();
         for _ in 0..quantity {
             result.key_packages.push(core::generate_key_package(
                 &self.client_id,
-                &provider,
+                &self.provider,
                 self.ciphersuite()?,
                 last_resort,
                 public_key.clone(),
@@ -488,14 +487,12 @@ impl UqMls {
     }
 
     pub fn create_group(&self, group_id: &str, public_key: Option<Vec<u8>>) -> Result<(), Error> {
-        let provider = self.provider()?;
-
-        if let Ok(_) = core::group(&provider, group_id) {
+        if let Ok(_) = core::group(&self.provider, group_id) {
             return Err(Error::GroupIsAlreadyExisted);
         }
 
         core::create_group(
-            &provider,
+            &self.provider,
             &self.client_id,
             group_id,
             self.ciphersuite()?,
@@ -512,8 +509,8 @@ impl UqMls {
             public_key,
         )?;
 
-        let conn = Connection::open(&self.group_storage_path)?;
-        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::CreateGroup);
+        let _ =
+            insert_or_update_group_status(&self.conn, group_id, GroupPendingOperation::CreateGroup);
 
         Ok(())
     }
@@ -523,19 +520,21 @@ impl UqMls {
         group_id: &str,
         key_packages: &[Vec<u8>],
     ) -> Result<AddMembersResult, Error> {
-        let provider = self.provider()?;
-
-        let result = core::add_members(&provider, group_id, key_packages)?;
-        let conn = Connection::open(&self.group_storage_path)?;
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
+        let result = core::add_members(&mut mls_group, &self.provider, &signer, key_packages)?;
 
         let mut current_pending_operation = GroupPendingOperation::None;
-        if let Ok(op) = get_group_pending_operation(&conn, group_id) {
+        if let Ok(op) = get_group_pending_operation(&self.conn, group_id) {
             current_pending_operation = op.into();
         }
 
         if current_pending_operation == GroupPendingOperation::None {
-            let _ =
-                insert_or_update_group_status(&conn, group_id, GroupPendingOperation::UpdateTree);
+            let _ = insert_or_update_group_status(
+                &self.conn,
+                group_id,
+                GroupPendingOperation::UpdateTree,
+            );
         }
 
         Ok(result.into())
@@ -547,19 +546,20 @@ impl UqMls {
         member_ids: &[String],
         key_packages: &[Vec<u8>],
     ) -> Result<ReAddResult, Error> {
-        let provider = self.provider()?;
-
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
         let result = core::readd(
-            &provider,
-            group_id,
+            &mut mls_group,
+            &self.provider,
+            &signer,
             &member_ids
                 .iter()
                 .map(|id| id.as_str())
                 .collect::<Vec<&str>>(),
             key_packages,
         )?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::UpdateTree);
+        let _ =
+            insert_or_update_group_status(&self.conn, group_id, GroupPendingOperation::UpdateTree);
 
         Ok(result.into())
     }
@@ -586,27 +586,26 @@ impl UqMls {
         group_id: &str,
         member_ids: &[String],
     ) -> Result<RemoveMembersResult, Error> {
-        let provider = self.provider()?;
-
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
         let result = core::remove_members(
-            &provider,
-            group_id,
+            &mut mls_group,
+            &self.provider,
+            &signer,
             &member_ids
                 .iter()
                 .map(|id| id.as_str())
                 .collect::<Vec<&str>>(),
         )?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::UpdateTree);
+        let _ =
+            insert_or_update_group_status(&self.conn, group_id, GroupPendingOperation::UpdateTree);
 
         Ok(result.into())
     }
 
     pub fn process_welcome(&self, welcome: &[u8]) -> Result<(), Error> {
-        let provider = self.provider()?;
-
         core::process_welcome(
-            &provider,
+            &self.provider,
             welcome,
             &MlsGroupJoinConfig::builder()
                 .wire_format_policy(self.wire_format_policy())
@@ -627,9 +626,10 @@ impl UqMls {
         group_id: &str,
         message: &[u8],
     ) -> Result<ProcessOperationMessageResult, Error> {
-        let provider = self.provider()?;
-
-        let result = core::process_operation_message(&provider, group_id, message)?;
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
+        let result =
+            core::process_operation_message(&mut mls_group, &self.provider, &signer, message)?;
 
         Ok(result.into())
     }
@@ -639,9 +639,8 @@ impl UqMls {
         group_id: &str,
         message: &[u8],
     ) -> Result<ProcessApplicationMessageResult, Error> {
-        let provider = self.provider()?;
-
-        let result = core::process_application_message(&provider, group_id, message)?;
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let result = core::process_application_message(&mut mls_group, &self.provider, message)?;
 
         Ok(result.into())
     }
@@ -651,9 +650,15 @@ impl UqMls {
         group_id: &str,
         messages: &[Vec<u8>],
     ) -> Result<ProcessManyOperationMessagesResult, Error> {
-        let provider = self.provider()?;
-
-        let result = core::process_many_operation_messages(&provider, group_id, messages)?;
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
+        let result = core::process_many_operation_messages(
+            &mut mls_group,
+            &self.provider,
+            &signer,
+            messages,
+            None,
+        )?;
 
         Ok(result.into())
     }
@@ -663,9 +668,9 @@ impl UqMls {
         group_id: &str,
         message: &[u8],
     ) -> Result<QueuedProposal, Error> {
-        let provider = self.provider()?;
-
-        let queued_proposal = core::process_proposal_message(&provider, group_id, message)?;
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let queued_proposal =
+            core::process_proposal_message(&mut mls_group, &self.provider, message)?;
 
         Ok(queued_proposal.into())
     }
@@ -685,15 +690,24 @@ impl UqMls {
     }
 
     pub fn encrypt_message(&self, group_id: &str, message: &[u8]) -> Result<Vec<u8>, Error> {
-        let provider = self.provider()?;
-
-        Ok(core::encrypt_message(&provider, group_id, message)?)
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
+        Ok(core::encrypt_message(
+            &mut mls_group,
+            &self.provider,
+            &signer,
+            message,
+        )?)
     }
 
     pub fn export_group_info(&self, group_id: &str) -> Result<Vec<u8>, Error> {
-        let provider = self.provider()?;
-
-        Ok(core::export_group_info(&provider, group_id)?)
+        let mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
+        Ok(core::export_group_info(
+            &mls_group,
+            &self.provider,
+            &signer,
+        )?)
     }
 
     pub fn join_by_external_commit(
@@ -702,10 +716,8 @@ impl UqMls {
         group_info: &[u8],
         public_key: Option<Vec<u8>>,
     ) -> Result<JoinByExternalCommitResult, Error> {
-        let provider = self.provider()?;
-
         let result = core::join_by_external_commit(
-            &provider,
+            &self.provider,
             &self.client_id,
             group_info,
             self.ciphersuite()?,
@@ -720,9 +732,8 @@ impl UqMls {
                 .build(),
             public_key,
         )?;
-        let conn = Connection::open(&self.group_storage_path)?;
         let _ = insert_or_update_group_status(
-            &conn,
+            &self.conn,
             group_id,
             GroupPendingOperation::JoinByExternalCommit,
         );
@@ -735,7 +746,6 @@ impl UqMls {
         args: &[JoinByExternalCommitArgs],
         public_key: Option<Vec<u8>>,
     ) -> Result<Vec<WrappedJoinByExternalCommitResult>, Error> {
-        let provider = self.provider()?;
         let ciphersuite = self.ciphersuite()?;
         let config = MlsGroupJoinConfig::builder()
             .wire_format_policy(self.wire_format_policy())
@@ -747,12 +757,11 @@ impl UqMls {
             ))
             .build();
 
-        let conn = Connection::open(&self.group_storage_path)?;
         Ok(args
             .iter()
             .map(|arg| {
                 match core::join_by_external_commit(
-                    &provider,
+                    &self.provider,
                     &self.client_id,
                     &arg.group_info,
                     ciphersuite,
@@ -761,7 +770,7 @@ impl UqMls {
                 ) {
                     Ok(result) => {
                         let _ = insert_or_update_group_status(
-                            &conn,
+                            &self.conn,
                             &arg.group_id,
                             GroupPendingOperation::JoinByExternalCommit,
                         );
@@ -782,75 +791,65 @@ impl UqMls {
     }
 
     pub fn leave_group(&self, group_id: &str) -> Result<LeaveGroupResult, Error> {
-        let provider = self.provider()?;
-
-        let result = core::leave_group(&provider, group_id)?;
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
+        let result = core::leave_group(&mut mls_group, &self.provider, &signer)?;
 
         Ok(result.into())
     }
 
     pub fn update_leaf_node(&self, group_id: &str) -> Result<UpdateLeafNodeResult, Error> {
-        let provider = self.provider()?;
-
-        let result = core::update_leaf_node(&provider, group_id)?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::UpdateTree);
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
+        let result = core::update_leaf_node(&mut mls_group, &self.provider, &signer)?;
+        let _ =
+            insert_or_update_group_status(&self.conn, group_id, GroupPendingOperation::UpdateTree);
 
         Ok(result.into())
     }
 
     pub fn merge_pending_commit(&self, group_id: &str) -> Result<(), Error> {
-        let provider = self.provider()?;
-
-        core::merge_pending_commit(&provider, group_id)?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        core::merge_pending_commit(&mut mls_group, &self.provider)?;
+        let _ = insert_or_update_group_status(&self.conn, group_id, GroupPendingOperation::None);
 
         Ok(())
     }
 
     pub fn clear_pending_commit(&self, group_id: &str) -> Result<(), Error> {
-        let provider = self.provider()?;
-
-        core::clear_pending_commit(&provider, group_id)?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        core::clear_pending_commit(&mut mls_group, &self.provider)?;
+        let _ = insert_or_update_group_status(&self.conn, group_id, GroupPendingOperation::None);
 
         Ok(())
     }
 
     pub fn clear_pending_proposals(&self, group_id: &str) -> Result<(), Error> {
-        let provider = self.provider()?;
-
-        core::clear_pending_proposals(&provider, group_id)?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let _ = insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
+        let mut mls_group = core::group(&self.provider, group_id)?;
+        core::clear_pending_proposals(&mut mls_group, &self.provider)?;
+        let _ = insert_or_update_group_status(&self.conn, group_id, GroupPendingOperation::None);
 
         Ok(())
     }
 
     pub fn pending_commit(&self, group_id: &str) -> Result<Option<PendingCommitResult>, Error> {
-        let provider = self.provider()?;
-
-        let pending_commit = core::pending_commit(&provider, group_id)?;
+        let mls_group = core::group(&self.provider, group_id)?;
+        let pending_commit = core::pending_commit(&mls_group);
 
         Ok(pending_commit.map(|commit| commit.into()))
     }
 
     pub fn pending_proposals(&self, group_id: &str) -> Result<PendingProposalsResult, Error> {
-        let provider = self.provider()?;
-
-        let result = core::pending_proposals(&provider, group_id)?;
+        let mls_group = core::group(&self.provider, group_id)?;
+        let result = core::pending_proposals(&mls_group);
 
         Ok(result.into())
     }
 
     pub fn group_epoch(&self, group_id: &str) -> Result<WrappedGroupEpochResult, Error> {
-        let provider = self.provider()?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let pending_operation = get_group_pending_operation(&conn, group_id).unwrap_or(None);
+        let pending_operation = get_group_pending_operation(&self.conn, group_id).unwrap_or(None);
 
-        Ok(match core::group(&provider, group_id) {
+        Ok(match core::group(&self.provider, group_id) {
             Ok(group) => WrappedGroupEpochResult {
                 group_id: group_id.to_owned(),
                 epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
@@ -873,11 +872,9 @@ impl UqMls {
     }
 
     pub fn group_context(&self, group_id: &str) -> Result<WrappedGroupContextResult, Error> {
-        let provider = self.provider()?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let pending_operation = get_group_pending_operation(&conn, group_id).unwrap_or(None);
+        let pending_operation = get_group_pending_operation(&self.conn, group_id).unwrap_or(None);
 
-        Ok(match core::group(&provider, group_id) {
+        Ok(match core::group(&self.provider, group_id) {
             Ok(group) => WrappedGroupContextResult {
                 group_id: group_id.to_owned(),
                 epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
@@ -903,15 +900,12 @@ impl UqMls {
         &self,
         group_ids: &[String],
     ) -> Result<Vec<WrappedGroupEpochResult>, Error> {
-        let provider = self.provider()?;
-        let conn = Connection::open(&self.group_storage_path)?;
-
         Ok(group_ids
             .iter()
             .map(|group_id| {
                 let pending_operation =
-                    get_group_pending_operation(&conn, group_id).unwrap_or(None);
-                match core::group(&provider, group_id) {
+                    get_group_pending_operation(&self.conn, group_id).unwrap_or(None);
+                match core::group(&self.provider, group_id) {
                     Ok(group) => WrappedGroupEpochResult {
                         group_id: group_id.to_owned(),
                         epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
@@ -939,15 +933,12 @@ impl UqMls {
         &self,
         group_ids: &[String],
     ) -> Result<Vec<WrappedGroupContextResult>, Error> {
-        let provider = self.provider()?;
-        let conn = Connection::open(&self.group_storage_path)?;
-
         Ok(group_ids
             .iter()
             .map(|group_id| {
                 let pending_operation =
-                    get_group_pending_operation(&conn, group_id).unwrap_or(None);
-                match core::group(&provider, group_id) {
+                    get_group_pending_operation(&self.conn, group_id).unwrap_or(None);
+                match core::group(&self.provider, group_id) {
                     Ok(group) => WrappedGroupContextResult {
                         group_id: group_id.to_owned(),
                         epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
@@ -972,17 +963,14 @@ impl UqMls {
     }
 
     pub fn delete_group(&self, group_id: &str) -> Result<(), Error> {
-        let provider = self.provider()?;
-        let conn = Connection::open(&self.group_storage_path)?;
-        let _ = delete_group_status(&conn, group_id);
+        let _ = delete_group_status(&self.conn, group_id);
+        let mut mls_group = core::group(&self.provider, group_id)?;
 
-        Ok(core::delete_group(&provider, group_id)?)
+        Ok(core::delete_group(&mut mls_group, &self.provider)?)
     }
 
     pub fn members(&self, group_id: &str) -> Result<Vec<String>, Error> {
-        let provider = self.provider()?;
-
-        let group = core::group(&provider, group_id)?;
+        let group = core::group(&self.provider, group_id)?;
 
         let members = group
             .members()
@@ -1003,13 +991,16 @@ impl UqMls {
     pub fn process_all_messages(
         &self,
         args: ProcessAllMessagesArgs,
+        callback: Option<Arc<dyn ProcessMessagesCallback>>,
     ) -> Result<ProcessAllMessagesResult, Error> {
-        let provider = self.provider()?;
+        let log_fn = callback.as_ref().map(|cb| {
+            let cb = cb.clone();
+            move |msg: String| cb.on_trigger(msg)
+        });
 
-        let conn = Connection::open(&self.group_storage_path)?;
         let result = process_all_messages(
-            &conn,
-            &provider,
+            &self.conn,
+            &self.provider,
             kchat_mls::ProcessAllMessagesArgs {
                 group_messages: args
                     .group_messages
@@ -1038,6 +1029,7 @@ impl UqMls {
                     self.maximum_forward_distance,
                 ))
                 .build(),
+            log_fn.as_ref().map(|f| f as &dyn Fn(String)),
         )?;
 
         Ok(ProcessAllMessagesResult {
@@ -1069,10 +1061,7 @@ impl UqMls {
     }
 
     pub fn get_pending_creation_groups(&self) -> Result<GetPendingCreationGroupsResult, Error> {
-        let provider = self.provider()?;
-        let conn = Connection::open(&self.group_storage_path)?;
-
-        let result = kchat_mls::get_pending_creation_groups(&conn, &provider)?;
+        let result = kchat_mls::get_pending_creation_groups(&self.conn, &self.provider)?;
 
         Ok(GetPendingCreationGroupsResult {
             group_ids: result.group_ids,
@@ -1083,12 +1072,9 @@ impl UqMls {
         &self,
         args: ProcessPendingCreationsArgs,
     ) -> Result<ProcessPendingCreationsResult, Error> {
-        let provider = self.provider()?;
-        let conn = Connection::open(&self.group_storage_path)?;
-
         Ok(kchat_mls::process_pending_creations(
-            &conn,
-            &provider,
+            &self.conn,
+            &self.provider,
             kchat_mls::ProcessPendingCreationsArgs {
                 groups: args
                     .groups

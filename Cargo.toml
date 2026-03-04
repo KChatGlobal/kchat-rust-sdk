@@ -5,6 +5,7 @@ members = [
     "crates/kchat-mls-uniffi",
     "crates/kchat-mls-napi",
     "crates/uq-openmls",
+    "crates/kchat-storage-provider",
 ]
 
 [workspace.dependencies]
@@ -18,4 +19,3 @@ openmls = { version = "0.8.0" }
 openmls_basic_credential = { version = "0.5.0" }
 openmls_traits = { version = "0.5.0" }
 openmls_rust_crypto = { version =  "0.5.0" }
-openmls_sqlite_storage = { version = "0.2.0", default-features = false }

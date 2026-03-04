@@ -1296,7 +1296,6 @@ dependencies = [
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto 0.5.0",
- "openmls_sqlite_storage",
  "openmls_traits 0.5.0",
  "rusqlite",
  "secrecy",
@@ -1315,7 +1314,6 @@ dependencies = [
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto 0.5.0",
- "openmls_sqlite_storage",
  "openmls_traits 0.5.0",
  "rand 0.9.2",
  "rusqlite",
@@ -1339,12 +1337,23 @@ dependencies = [
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto 0.5.0",
- "openmls_sqlite_storage",
  "openmls_traits 0.5.0",
  "rusqlite",
  "secrecy",
  "thiserror",
  "uq-openmls",
+]
+
+[[package]]
+name = "kchat_storage_provider"
+version = "0.2.0"
+dependencies = [
+ "log",
+ "openmls_traits 0.5.0",
+ "refinery",
+ "rusqlite",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
@@ -1931,20 +1940,6 @@ dependencies = [
  "sha2",
  "thiserror",
  "tls_codec",
-]
-
-[[package]]
-name = "openmls_sqlite_storage"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b19fa5f88e6f52b6933e78dcfc9e3a7e87eed99a0ab2a4ecade7ff620431fe31"
-dependencies = [
- "log",
- "openmls_traits 0.5.0",
- "refinery",
- "rusqlite",
- "serde",
- "thiserror",
 ]
 
 [[package]]
@@ -3251,10 +3246,10 @@ name = "uq-openmls"
 version = "0.2.0"
 dependencies = [
  "criterion",
+ "kchat_storage_provider",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto 0.5.0",
- "openmls_sqlite_storage",
  "openmls_traits 0.5.0",
  "rusqlite",
  "secrecy",

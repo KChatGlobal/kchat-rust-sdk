@@ -1,13 +1,13 @@
 use openmls::group::MlsGroupCreateConfig;
 use uq_openmls::{
-    core::{
-        AddMembersResult, DEFAULT_CIPHERSUITE, add_members, encrypt_message, merge_pending_commit,
-        process_application_message, process_operation_message,
-    },
+    core::{AddMembersResult, DEFAULT_CIPHERSUITE},
     error::Error,
 };
 
-use crate::helper::{init_group_with_members, init_members};
+use crate::helper::{
+    add_members, encrypt_message, init_group_with_members, init_members, merge_pending_commit,
+    process_application_message, process_operation_message,
+};
 
 #[test]
 fn test_add_member_and_encrypt_decrypte_message() {

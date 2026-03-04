@@ -6,9 +6,11 @@
 //! SQLite-based storage is persistent and will be saved to a file. It's useful for production applications
 //! where data persistence is required.
 
+use std::sync::{Arc, Mutex};
+
+use kchat_storage_provider::{Codec, SqliteStorageProvider};
 use openmls::prelude::OpenMlsProvider;
 use openmls_rust_crypto::RustCrypto;
-use openmls_sqlite_storage::{Codec, SqliteStorageProvider};
 use rusqlite::Connection;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Serialize, de::DeserializeOwned};
@@ -37,7 +39,7 @@ impl Codec for JsonCodec {
 
 pub struct SqliteProvider {
     crypto: RustCrypto,
-    mls_storage: SqliteStorageProvider<JsonCodec, Connection>,
+    mls_storage: SqliteStorageProvider<JsonCodec>,
 }
 
 const SQLITE_PRAGMA_NAME_KEY: &str = "key";
@@ -49,7 +51,7 @@ impl SqliteProvider {
             connection.pragma_update(None, SQLITE_PRAGMA_NAME_KEY, secret.expose_secret())?;
         }
 
-        let mut mls_storage = SqliteStorageProvider::new(connection);
+        let mut mls_storage = SqliteStorageProvider::new(Arc::new(Mutex::new(connection)));
         mls_storage
             .run_migrations()
             .map_err(|e| Error::SqliteMigration(e.to_string()))?;
@@ -64,7 +66,7 @@ impl SqliteProvider {
 impl OpenMlsProvider for SqliteProvider {
     type CryptoProvider = RustCrypto;
     type RandProvider = RustCrypto;
-    type StorageProvider = SqliteStorageProvider<JsonCodec, Connection>;
+    type StorageProvider = SqliteStorageProvider<JsonCodec>;
 
     fn storage(&self) -> &Self::StorageProvider {
         &self.mls_storage

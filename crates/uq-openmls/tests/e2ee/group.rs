@@ -10,15 +10,17 @@ use openmls_traits::OpenMlsProvider;
 use uq_openmls::{
     core::{
         AddMembersResult, DEFAULT_CIPHERSUITE, JoinByExternalCommitResult, ReAddResult,
-        RemoveMembersResult, add_members, create_group, delete_group, encrypt_message,
-        export_group_info, generate_key_package, join_by_external_commit, leave_group,
-        merge_pending_commit, process_application_message, process_operation_message,
-        process_welcome, readd, remove_members, update_leaf_node,
+        RemoveMembersResult, create_group, generate_key_package, join_by_external_commit,
+        process_welcome,
     },
     error::Error,
 };
 
-use crate::helper::{init_group_with_members, init_members};
+use crate::helper::{
+    add_members, delete_group, encrypt_message, export_group_info, init_group_with_members,
+    init_members, leave_group, merge_pending_commit, process_application_message,
+    process_operation_message, readd, remove_members, update_leaf_node,
+};
 
 #[test]
 fn test_three_members_create_group_and_add_member() {

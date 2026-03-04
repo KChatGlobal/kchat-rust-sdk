@@ -16,7 +16,6 @@ openmls = { workspace = true }
 openmls_basic_credential = { workspace = true }
 openmls_traits = { workspace = true }
 openmls_rust_crypto = { workspace = true }
-openmls_sqlite_storage = { workspace = true, default-features = false }
 
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["full"] }

@@ -9,7 +9,6 @@ openmls = { workspace = true, features = ["test-utils"] }
 openmls_basic_credential = { workspace = true }
 openmls_traits = { workspace = true }
 openmls_rust_crypto = { workspace = true }
-openmls_sqlite_storage = { workspace = true, default-features = false }
 uq-openmls = { path = "../uq-openmls" }
 
 rusqlite = { version = "0.32", features = ["bundled"] }

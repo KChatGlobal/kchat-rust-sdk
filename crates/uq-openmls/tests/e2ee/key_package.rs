@@ -1,9 +1,10 @@
 use openmls::group::{MlsGroupCreateConfig, MlsGroupJoinConfig};
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use uq_openmls::core::{
-    AddMembersResult, DEFAULT_CIPHERSUITE, add_members, create_group, generate_key_package,
-    merge_pending_commit, process_welcome,
+    AddMembersResult, DEFAULT_CIPHERSUITE, create_group, generate_key_package, process_welcome,
 };
+
+use crate::helper::{add_members, merge_pending_commit};
 
 #[test]
 fn test_key_package_last_resort() {

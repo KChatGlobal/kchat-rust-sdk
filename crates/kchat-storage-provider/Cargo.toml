@@ -1,0 +1,15 @@
+[package]
+name = "kchat_storage_provider"
+version = "0.2.0"
+edition = "2024"
+
+[dependencies]
+openmls_traits = { workspace = true }
+thiserror = "2.0"
+serde = { workspace = true }
+log = { version = "0.4" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+refinery = { version = "0.9", features = ["rusqlite", "enums"] }
+
+[features]
+extensions-draft-08 = ["openmls_traits/extensions-draft-08"]

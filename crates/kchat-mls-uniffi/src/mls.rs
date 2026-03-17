@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use kchat_mls::{
-    CreateCustomProposalArgs, GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT,
+    CreateCustomProposalArgs, GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT, OP_NONE,
     create_custom_proposal, delete_group_status, get_group_pending_operation, initialize,
     insert_or_update_group_status, process_all_messages,
 };
@@ -317,7 +317,8 @@ pub struct WrappedGroupEpochResult {
 #[derive(uniffi::Record)]
 pub struct WrappedGroupContextResult {
     pub group_id: String,
-    pub epoch: i64,
+    pub current_epoch: i64,
+    pub pending_epoch: i64,
     pub tree_hash: Vec<u8>,
     pub err: Option<String>,
     pub pending_operation: Option<String>,
@@ -349,6 +350,10 @@ pub struct ProcessAllMessagesArgs {
 pub struct AllMessagesOfGroupArgs {
     pub group_id: String,
     pub messages: Vec<MlsMessage>,
+    pub current_epoch: i64,
+    pub current_tree_hash: Vec<u8>,
+    pub pending_epoch: i64,
+    pub pending_tree_hash: Vec<u8>,
 }
 
 #[derive(uniffi::Record)]
@@ -384,48 +389,6 @@ pub struct CustomProposal {
     pub mls_fingerprint: String,
     pub group_id: String,
     pub proposal_type: String,
-}
-
-#[derive(uniffi::Record)]
-pub struct GetPendingCreationGroupsResult {
-    pub group_ids: Vec<String>,
-}
-
-#[derive(uniffi::Record)]
-pub struct ProcessPendingCreationsArgs {
-    groups: Vec<PendingCreationGroup>,
-}
-
-#[derive(uniffi::Record)]
-pub struct PendingCreationGroup {
-    pub group_id: String,
-    pub tree_hash: Vec<u8>,
-}
-
-#[derive(uniffi::Record)]
-pub struct ProcessPendingCreationsResult {
-    groups: Vec<PendingCreationGroupResult>,
-}
-
-#[derive(uniffi::Record)]
-pub struct PendingCreationGroupResult {
-    pub group_id: String,
-    pub err: Option<String>,
-}
-
-impl From<kchat_mls::ProcessPendingCreationsResult> for ProcessPendingCreationsResult {
-    fn from(value: kchat_mls::ProcessPendingCreationsResult) -> Self {
-        Self {
-            groups: value
-                .groups
-                .iter()
-                .map(|group| PendingCreationGroupResult {
-                    group_id: group.group_id.to_owned(),
-                    err: group.err.to_owned(),
-                })
-                .collect(),
-        }
-    }
 }
 
 #[uniffi::export]
@@ -546,6 +509,15 @@ impl UqMls {
         member_ids: &[String],
         key_packages: &[Vec<u8>],
     ) -> Result<ReAddResult, Error> {
+        if let Some(op) = get_group_pending_operation(&self.conn, group_id).unwrap_or(None) {
+            if !op.eq(OP_NONE) {
+                return Err(Error::ReAdd(format!(
+                    "There is a pending operation: {}",
+                    op
+                )));
+            }
+        }
+
         let mut mls_group = core::group(&self.provider, group_id)?;
         let signer = core::group_signer(&mls_group, &self.provider)?;
         let result = core::readd(
@@ -877,7 +849,8 @@ impl UqMls {
         Ok(match core::group(&self.provider, group_id) {
             Ok(group) => WrappedGroupContextResult {
                 group_id: group_id.to_owned(),
-                epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
+                current_epoch: group.epoch().as_u64() as i64,
+                pending_epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
                     group.epoch().as_u64() as i64 - 1
                 } else {
                     group.epoch().as_u64() as i64
@@ -888,7 +861,8 @@ impl UqMls {
             },
             Err(err) => WrappedGroupContextResult {
                 group_id: group_id.to_owned(),
-                epoch: -1,
+                current_epoch: -1,
+                pending_epoch: -1,
                 tree_hash: Vec::new(),
                 err: Some(err.to_string()),
                 pending_operation: None,
@@ -941,7 +915,10 @@ impl UqMls {
                 match core::group(&self.provider, group_id) {
                     Ok(group) => WrappedGroupContextResult {
                         group_id: group_id.to_owned(),
-                        epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
+                        current_epoch: group.epoch().as_u64() as i64,
+                        pending_epoch: if pending_operation
+                            == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned())
+                        {
                             group.epoch().as_u64() as i64 - 1
                         } else {
                             group.epoch().as_u64() as i64
@@ -952,7 +929,8 @@ impl UqMls {
                     },
                     Err(err) => WrappedGroupContextResult {
                         group_id: group_id.to_owned(),
-                        epoch: -1,
+                        current_epoch: -1,
+                        pending_epoch: -1,
                         tree_hash: Vec::new(),
                         err: Some(err.to_string()),
                         pending_operation: None,
@@ -1017,6 +995,10 @@ impl UqMls {
                                 message_type: msg.message_type.as_str().into(),
                             })
                             .collect(),
+                        current_epoch: msg.current_epoch,
+                        current_tree_hash: msg.current_tree_hash.to_owned(),
+                        pending_epoch: msg.pending_epoch,
+                        pending_tree_hash: msg.pending_tree_hash.to_owned(),
                     })
                     .collect(),
             },
@@ -1058,34 +1040,5 @@ impl UqMls {
                 .collect(),
             deleted_groups: result.deleted_groups,
         })
-    }
-
-    pub fn get_pending_creation_groups(&self) -> Result<GetPendingCreationGroupsResult, Error> {
-        let result = kchat_mls::get_pending_creation_groups(&self.conn, &self.provider)?;
-
-        Ok(GetPendingCreationGroupsResult {
-            group_ids: result.group_ids,
-        })
-    }
-
-    pub fn process_pending_creations(
-        &self,
-        args: ProcessPendingCreationsArgs,
-    ) -> Result<ProcessPendingCreationsResult, Error> {
-        Ok(kchat_mls::process_pending_creations(
-            &self.conn,
-            &self.provider,
-            kchat_mls::ProcessPendingCreationsArgs {
-                groups: args
-                    .groups
-                    .iter()
-                    .map(|group_data| kchat_mls::PendingCreationGroup {
-                        group_id: group_data.group_id.to_owned(),
-                        tree_hash: group_data.tree_hash.to_owned(),
-                    })
-                    .collect(),
-            },
-        )?
-        .into())
     }
 }

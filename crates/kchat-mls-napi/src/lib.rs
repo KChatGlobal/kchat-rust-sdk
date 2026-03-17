@@ -5,7 +5,7 @@ pub mod error;
 use std::sync::{Arc, Mutex};
 
 use kchat_mls::{
-    CreateCustomProposalArgs, GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT,
+    CreateCustomProposalArgs, GroupPendingOperation, OP_JOIN_BY_EXTERNAL_COMMIT, OP_NONE,
     create_custom_proposal, delete_group_status, get_group_pending_operation, initialize,
     insert_or_update_group_status, process_all_messages, process_custom_proposal,
 };
@@ -296,7 +296,8 @@ pub struct WrappedGroupEpochResult {
 #[napi(object)]
 pub struct WrappedGroupContextResult {
     pub group_id: String,
-    pub epoch: i64,
+    pub current_epoch: i64,
+    pub pending_epoch: i64,
     pub tree_hash: Vec<u8>,
     pub err: Option<String>,
     pub pending_operation: Option<String>,
@@ -311,6 +312,10 @@ pub struct ProcessAllMessagesArgs {
 pub struct AllMessagesOfGroupArgs {
     pub group_id: String,
     pub messages: Vec<MlsMessage>,
+    pub current_epoch: i64,
+    pub current_tree_hash: Vec<u8>,
+    pub pending_epoch: i64,
+    pub pending_tree_hash: Vec<u8>,
 }
 
 #[napi(object)]
@@ -391,32 +396,6 @@ pub struct ProcessPendingCreationsArgs {
 pub struct PendingCreationGroup {
     pub group_id: String,
     pub tree_hash: Vec<u8>,
-}
-
-#[napi(object)]
-pub struct ProcessPendingCreationsResult {
-    pub groups: Vec<PendingCreationGroupResult>,
-}
-
-#[napi(object)]
-pub struct PendingCreationGroupResult {
-    pub group_id: String,
-    pub err: Option<String>,
-}
-
-impl From<kchat_mls::ProcessPendingCreationsResult> for ProcessPendingCreationsResult {
-    fn from(value: kchat_mls::ProcessPendingCreationsResult) -> Self {
-        Self {
-            groups: value
-                .groups
-                .iter()
-                .map(|group| PendingCreationGroupResult {
-                    group_id: group.group_id.to_owned(),
-                    err: group.err.to_owned(),
-                })
-                .collect(),
-        }
-    }
 }
 
 impl UqMls {
@@ -545,8 +524,8 @@ impl UqMls {
     ) -> napi::Result<AddMembersResult> {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
+        let signer = core::group_signer(&mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?;
 
         let result = core::add_members(&mut mls_group, &self.provider, &signer, &key_packages)
             .map_err(|e| Error::Mls(e.to_string()))?;
@@ -575,8 +554,8 @@ impl UqMls {
     ) -> napi::Result<RemoveMembersResult> {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
+        let signer = core::group_signer(&mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?;
 
         let result = core::remove_members(
             &mut mls_group,
@@ -622,11 +601,12 @@ impl UqMls {
     ) -> napi::Result<ProcessOperationMessageResult> {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
-
-        let result = core::process_operation_message(&mut mls_group, &self.provider, &signer, &message)
+        let signer = core::group_signer(&mls_group, &self.provider)
             .map_err(|e| Error::Mls(e.to_string()))?;
+
+        let result =
+            core::process_operation_message(&mut mls_group, &self.provider, &signer, &message)
+                .map_err(|e| Error::Mls(e.to_string()))?;
 
         Ok(result.into())
     }
@@ -639,8 +619,8 @@ impl UqMls {
     ) -> napi::Result<ProcessManyOperationMessagesResult> {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
+        let signer = core::group_signer(&mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?;
 
         let result = core::process_many_operation_messages(
             &mut mls_group,
@@ -678,33 +658,19 @@ impl UqMls {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
 
-        let queued_proposal = core::process_proposal_message(&mut mls_group, &self.provider, &message)
-            .map_err(|e| Error::Mls(e.to_string()))?;
+        let queued_proposal =
+            core::process_proposal_message(&mut mls_group, &self.provider, &message)
+                .map_err(|e| Error::Mls(e.to_string()))?;
 
         Ok(queued_proposal.into())
-    }
-
-    #[napi]
-    pub fn process_custom_proposal_message(
-        &self,
-        custom_proposal: Vec<u8>,
-    ) -> Option<CustomProposal> {
-        let result = process_custom_proposal(&custom_proposal);
-
-        result.map(|result| CustomProposal {
-            mls_client_id: result.mls_client_id,
-            mls_fingerprint: result.mls_fingerprint,
-            group_id: result.group_id,
-            proposal_type: result.proposal_type.to_string(),
-        })
     }
 
     #[napi]
     pub fn encrypt_message(&self, group_id: String, message: Vec<u8>) -> napi::Result<Vec<u8>> {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
+        let signer = core::group_signer(&mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?;
 
         Ok(
             core::encrypt_message(&mut mls_group, &self.provider, &signer, &message)
@@ -714,9 +680,10 @@ impl UqMls {
 
     #[napi]
     pub fn export_group_info(&self, group_id: String) -> napi::Result<Vec<u8>> {
-        let mls_group = core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
+        let mls_group =
+            core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
+        let signer = core::group_signer(&mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?;
 
         Ok(core::export_group_info(&mls_group, &self.provider, &signer)
             .map_err(|e| Error::Mls(e.to_string()))?)
@@ -809,8 +776,8 @@ impl UqMls {
     pub fn leave_group(&self, group_id: String) -> napi::Result<LeaveGroupResult> {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
+        let signer = core::group_signer(&mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?;
 
         let result = core::leave_group(&mut mls_group, &self.provider, &signer)
             .map_err(|e| Error::Mls(e.to_string()))?;
@@ -822,8 +789,8 @@ impl UqMls {
     pub fn update_leaf_node(&self, group_id: String) -> napi::Result<UpdateLeafNodeResult> {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
+        let signer = core::group_signer(&mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?;
 
         let result = core::update_leaf_node(&mut mls_group, &self.provider, &signer)
             .map_err(|e| Error::Mls(e.to_string()))?;
@@ -840,10 +807,16 @@ impl UqMls {
         member_ids: Vec<String>,
         key_packages: Vec<Vec<u8>>,
     ) -> napi::Result<ReAddResult> {
+        if let Some(op) = get_group_pending_operation(&self.conn, &group_id).unwrap_or(None) {
+            if !op.eq(OP_NONE) {
+                return Err(Error::ReAdd(format!("There is a pending operation: {}", op)).into());
+            }
+        }
+
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
-        let signer =
-            core::group_signer(&mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?;
+        let signer = core::group_signer(&mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?;
 
         let result = core::readd(
             &mut mls_group,
@@ -918,14 +891,16 @@ impl UqMls {
 
     #[napi]
     pub fn pending_commit(&self, group_id: String) -> napi::Result<Option<PendingCommitResult>> {
-        let mls_group = core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
+        let mls_group =
+            core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
 
         Ok(core::pending_commit(&mls_group).map(|commit| commit.into()))
     }
 
     #[napi]
     pub fn pending_proposals(&self, group_id: String) -> napi::Result<PendingProposalsResult> {
-        let mls_group = core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
+        let mls_group =
+            core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
 
         Ok(core::pending_proposals(&mls_group).into())
     }
@@ -997,7 +972,8 @@ impl UqMls {
         Ok(match core::group(&self.provider, &group_id) {
             Ok(group) => WrappedGroupContextResult {
                 group_id: group_id.to_owned(),
-                epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
+                current_epoch: group.epoch().as_u64() as i64,
+                pending_epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
                     group.epoch().as_u64() as i64 - 1
                 } else {
                     group.epoch().as_u64() as i64
@@ -1008,7 +984,8 @@ impl UqMls {
             },
             Err(err) => WrappedGroupContextResult {
                 group_id: group_id.to_owned(),
-                epoch: -1,
+                current_epoch: -1,
+                pending_epoch: -1,
                 tree_hash: Vec::new(),
                 err: Some(err.to_string()),
                 pending_operation: None,
@@ -1029,7 +1006,10 @@ impl UqMls {
                 match core::group(&self.provider, group_id) {
                     Ok(group) => WrappedGroupContextResult {
                         group_id: group_id.to_owned(),
-                        epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
+                        current_epoch: group.epoch().as_u64() as i64,
+                        pending_epoch: if pending_operation
+                            == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned())
+                        {
                             group.epoch().as_u64() as i64 - 1
                         } else {
                             group.epoch().as_u64() as i64
@@ -1040,7 +1020,8 @@ impl UqMls {
                     },
                     Err(err) => WrappedGroupContextResult {
                         group_id: group_id.to_owned(),
-                        epoch: -1,
+                        current_epoch: -1,
+                        pending_epoch: -1,
                         tree_hash: Vec::new(),
                         err: Some(err.to_string()),
                         pending_operation: None,
@@ -1056,12 +1037,14 @@ impl UqMls {
         let mut mls_group =
             core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
 
-        Ok(core::delete_group(&mut mls_group, &self.provider).map_err(|e| Error::Mls(e.to_string()))?)
+        Ok(core::delete_group(&mut mls_group, &self.provider)
+            .map_err(|e| Error::Mls(e.to_string()))?)
     }
 
     #[napi]
     pub fn members(&self, group_id: String) -> napi::Result<Vec<String>> {
-        let mls_group = core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
+        let mls_group =
+            core::group(&self.provider, &group_id).map_err(|e| Error::Mls(e.to_string()))?;
 
         let members = mls_group
             .members()
@@ -1077,6 +1060,21 @@ impl UqMls {
             .collect::<Vec<String>>();
 
         Ok(members)
+    }
+
+    #[napi]
+    pub fn process_custom_proposal_message(
+        &self,
+        custom_proposal: Vec<u8>,
+    ) -> napi::Result<Option<CustomProposal>> {
+        Ok(
+            process_custom_proposal(&custom_proposal).map(|result| CustomProposal {
+                mls_client_id: result.mls_client_id,
+                mls_fingerprint: result.mls_fingerprint,
+                group_id: result.group_id,
+                proposal_type: result.proposal_type.to_string(),
+            }),
+        )
     }
 
     #[napi]
@@ -1103,6 +1101,10 @@ impl UqMls {
                                 message_type: msg.message_type.as_str().into(),
                             })
                             .collect(),
+                        current_epoch: msg.current_epoch,
+                        current_tree_hash: msg.current_tree_hash.to_owned(),
+                        pending_epoch: msg.pending_epoch,
+                        pending_tree_hash: msg.pending_tree_hash.to_owned(),
                     })
                     .collect(),
             },

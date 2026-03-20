@@ -6,9 +6,11 @@
 //! SQLite-based storage is persistent and will be saved to a file. It's useful for production applications
 //! where data persistence is required.
 
-use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use kchat_storage_provider::{Codec, SqliteStorageProvider};
+use kchat_storage_provider::{
+    Codec, SqliteConnectionPool, SqliteStorageProvider, TransactionalStorageProvider,
+};
 use openmls::prelude::OpenMlsProvider;
 use openmls_rust_crypto::RustCrypto;
 use rusqlite::Connection;
@@ -42,16 +44,43 @@ pub struct SqliteProvider {
     mls_storage: SqliteStorageProvider<JsonCodec>,
 }
 
+pub struct TransactionalSqliteProvider<'tx> {
+    crypto: &'tx RustCrypto,
+    mls_storage: TransactionalStorageProvider<'tx, JsonCodec>,
+}
+
 const SQLITE_PRAGMA_NAME_KEY: &str = "key";
+const SQLITE_PRAGMA_NAME_JOURNAL_MODE: &str = "journal_mode";
+const SQLITE_JOURNAL_MODE_WAL: &str = "WAL";
+const SQLITE_CONNECTION_POOL_SIZE: usize = 8;
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn configure_connection(
+    connection: &Connection,
+    secret: &Option<SecretString>,
+) -> Result<(), rusqlite::Error> {
+    if let Some(secret) = secret {
+        connection.pragma_update(None, SQLITE_PRAGMA_NAME_KEY, secret.expose_secret())?;
+    }
+    connection.pragma_update(
+        None,
+        SQLITE_PRAGMA_NAME_JOURNAL_MODE,
+        SQLITE_JOURNAL_MODE_WAL,
+    )?;
+    connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+    Ok(())
+}
 
 impl SqliteProvider {
     pub fn new(storage_path: &str, secret: &Option<SecretString>) -> Result<Self, Error> {
-        let connection = Connection::open(storage_path)?;
-        if let Some(secret) = secret {
-            connection.pragma_update(None, SQLITE_PRAGMA_NAME_KEY, secret.expose_secret())?;
-        }
-
-        let mut mls_storage = SqliteStorageProvider::new(Arc::new(Mutex::new(connection)));
+        let storage_path = storage_path.to_owned();
+        let secret = secret.clone();
+        let pool = SqliteConnectionPool::new(SQLITE_CONNECTION_POOL_SIZE, move || {
+            let connection = Connection::open(&storage_path)?;
+            configure_connection(&connection, &secret)?;
+            Ok(connection)
+        });
+        let mut mls_storage = SqliteStorageProvider::new(pool);
         mls_storage
             .run_migrations()
             .map_err(|e| Error::SqliteMigration(e.to_string()))?;
@@ -59,6 +88,22 @@ impl SqliteProvider {
         Ok(Self {
             crypto: RustCrypto::default(),
             mls_storage,
+        })
+    }
+
+    /// Execute a closure within a single SQLite transaction-backed provider.
+    ///
+    /// Use this to wrap multi-step MLS operations so all storage writes are atomic.
+    pub fn transaction<F, T>(&self, f: F) -> Result<T, rusqlite::Error>
+    where
+        F: for<'tx> FnOnce(&TransactionalSqliteProvider<'tx>) -> Result<T, crate::error::Error>,
+    {
+        self.mls_storage.transaction(|tx| {
+            let tx_provider = TransactionalSqliteProvider {
+                crypto: &self.crypto,
+                mls_storage: TransactionalStorageProvider::new(tx),
+            };
+            f(&tx_provider).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
         })
     }
 }
@@ -78,5 +123,23 @@ impl OpenMlsProvider for SqliteProvider {
 
     fn rand(&self) -> &Self::RandProvider {
         &self.crypto
+    }
+}
+
+impl<'tx> OpenMlsProvider for TransactionalSqliteProvider<'tx> {
+    type CryptoProvider = RustCrypto;
+    type RandProvider = RustCrypto;
+    type StorageProvider = TransactionalStorageProvider<'tx, JsonCodec>;
+
+    fn storage(&self) -> &Self::StorageProvider {
+        &self.mls_storage
+    }
+
+    fn crypto(&self) -> &Self::CryptoProvider {
+        self.crypto
+    }
+
+    fn rand(&self) -> &Self::RandProvider {
+        self.crypto
     }
 }

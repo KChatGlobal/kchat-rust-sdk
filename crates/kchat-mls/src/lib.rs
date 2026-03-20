@@ -1,15 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    time::Duration,
     u64,
 };
 
+use kchat_storage_provider::SqliteConnectionPool;
 use openmls::{
     group::{MlsGroup, MlsGroupJoinConfig},
     prelude::{BasicCredential, Credential},
 };
 use rusqlite::{Connection, params};
-use serde::{Deserialize, Serialize};
 use uq_openmls::{
     core::{
         Proposal, clear_pending_commit, delete_group, group, group_signer, merge_pending_commit,
@@ -18,6 +18,28 @@ use uq_openmls::{
     error::Error,
     provider::SqliteProvider,
 };
+
+pub type GroupStatusConnection = SqliteConnectionPool;
+
+const GROUP_STATUS_CONNECTION_POOL_SIZE: usize = 8;
+const GROUP_STATUS_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn configure_group_status_connection(connection: &Connection) -> Result<(), rusqlite::Error> {
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.busy_timeout(GROUP_STATUS_BUSY_TIMEOUT)?;
+    Ok(())
+}
+
+pub fn open_group_status_connection(path: &str) -> Result<GroupStatusConnection, Error> {
+    let path = path.to_owned();
+    let conn = SqliteConnectionPool::new(GROUP_STATUS_CONNECTION_POOL_SIZE, move || {
+        let connection = Connection::open(&path)?;
+        configure_group_status_connection(&connection)?;
+        Ok(connection)
+    });
+    initialize(&conn)?;
+    Ok(conn)
+}
 
 pub struct ProcessAllMessagesArgs {
     pub group_messages: Vec<AllMessagesOfGroupArgs>,
@@ -100,7 +122,8 @@ impl Into<String> for GroupPendingOperation {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct CustomProposal {
     pub mls_client_id: String,
     pub mls_fingerprint: String,
@@ -108,7 +131,8 @@ pub struct CustomProposal {
     pub proposal_type: CustomProposalType,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub enum CustomProposalType {
     ReAdd,
 }
@@ -122,40 +146,41 @@ impl ToString for CustomProposalType {
 }
 
 pub fn insert_or_update_group_status(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &GroupStatusConnection,
     group_id: &str,
     pending_operation: GroupPendingOperation,
 ) -> Result<(), Error> {
     let pending_operation: String = pending_operation.into();
-
-    conn.lock().unwrap().execute(
+    let connection = conn.checkout()?;
+    let mut stmt = connection.prepare_cached(
         "
         INSERT INTO group_statuses (group_id, pending_operation)
         VALUES (?1, ?2)
         ON CONFLICT(group_id) DO UPDATE SET pending_operation = excluded.pending_operation
         ",
-        params![group_id, pending_operation],
     )?;
+
+    stmt.execute(params![group_id, pending_operation])?;
 
     Ok(())
 }
 
-pub fn delete_group_status(conn: &Arc<Mutex<Connection>>, group_id: &str) -> Result<(), Error> {
-    conn.lock().unwrap().execute(
-        "DELETE FROM group_statuses WHERE group_id = ?1",
-        params![group_id],
-    )?;
+pub fn delete_group_status(conn: &GroupStatusConnection, group_id: &str) -> Result<(), Error> {
+    let connection = conn.checkout()?;
+    let mut stmt = connection.prepare_cached("DELETE FROM group_statuses WHERE group_id = ?1")?;
+    stmt.execute(params![group_id])?;
 
     Ok(())
 }
 
 pub fn get_group_pending_operation(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &GroupStatusConnection,
     group_id: &str,
 ) -> Result<Option<String>, Error> {
-    let conn = conn.lock().unwrap();
-    let mut stmt =
-        conn.prepare("SELECT group_id, pending_operation FROM group_statuses WHERE group_id = ?1")?;
+    let conn = conn.checkout()?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT group_id, pending_operation FROM group_statuses WHERE group_id = ?1",
+    )?;
 
     let mut rows = stmt.query(params![group_id])?;
 
@@ -166,8 +191,8 @@ pub fn get_group_pending_operation(
     }
 }
 
-pub fn initialize(conn: &Arc<Mutex<Connection>>) -> Result<(), Error> {
-    conn.lock().unwrap().execute(
+pub fn initialize(conn: &GroupStatusConnection) -> Result<(), Error> {
+    conn.checkout()?.execute(
         "
         CREATE TABLE IF NOT EXISTS group_statuses (
             group_id TEXT PRIMARY KEY,
@@ -198,7 +223,7 @@ pub struct ProcessAllMessagesResult {
 }
 
 pub fn process_all_messages(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &GroupStatusConnection,
     provider: &SqliteProvider,
     args: ProcessAllMessagesArgs,
     join_config: &MlsGroupJoinConfig,
@@ -225,8 +250,8 @@ pub fn process_all_messages(
 
         let mut group_deleted = false;
         // Check desync to merge or clear pending commit
-        if let Some(group) = &mut mls_group {
-            let Some(own_member_id) = own_id_from_leaf_node(group) else {
+        if let Some(existing_group) = &mls_group {
+            let Some(own_member_id) = own_id_from_leaf_node(existing_group) else {
                 continue;
             };
 
@@ -234,7 +259,7 @@ pub fn process_all_messages(
                 get_group_pending_operation(&conn, group_id)?.into();
 
             let first_message = get_first_message(
-                group.epoch().as_u64(),
+                existing_group.epoch().as_u64(),
                 &messages_of_group,
                 pending_operation,
             );
@@ -243,18 +268,31 @@ pub fn process_all_messages(
                 GroupPendingOperation::CreateGroup
                 | GroupPendingOperation::JoinByExternalCommit => {
                     if pending_operation == GroupPendingOperation::CreateGroup
-                        && group.epoch().as_u64() == 0
+                        && existing_group.epoch().as_u64() == 0
                     {
                         if messages_of_group.pending_epoch == 0 {
-                            if group
+                            if existing_group
                                 .tree_hash()
                                 .to_vec()
                                 .iter()
                                 .eq(&messages_of_group.pending_tree_hash)
                             {
-                                merge_pending_commit(group, provider)?;
+                                mls_group = Some(
+                                    provider
+                                        .transaction(|tx_provider| {
+                                            let mut tx_group = group(tx_provider, group_id)?;
+                                            merge_pending_commit(&mut tx_group, tx_provider)?;
+                                            Ok(tx_group)
+                                        })
+                                        .map_err(|e| Error::Storage(e.to_string()))?,
+                                );
                             } else {
-                                delete_group(group, provider)?;
+                                provider
+                                    .transaction(|tx_provider| {
+                                        let mut tx_group = group(tx_provider, group_id)?;
+                                        delete_group(&mut tx_group, tx_provider)
+                                    })
+                                    .map_err(|e| Error::Storage(e.to_string()))?;
                                 result.deleted_groups.push(group_id.to_owned());
                                 let _ = delete_group_status(&conn, group_id);
                                 group_deleted = true;
@@ -268,15 +306,33 @@ pub fn process_all_messages(
                     } else {
                         if let Some(msg) = first_message {
                             if !own_member_id.contains(&msg.sender) {
-                                delete_group(group, provider)?;
+                                provider
+                                    .transaction(|tx_provider| {
+                                        let mut tx_group = group(tx_provider, group_id)?;
+                                        delete_group(&mut tx_group, tx_provider)
+                                    })
+                                    .map_err(|e| Error::Storage(e.to_string()))?;
                                 result.deleted_groups.push(group_id.to_owned());
                                 let _ = delete_group_status(&conn, group_id);
                                 group_deleted = true;
                             } else {
-                                merge_pending_commit(group, provider)?;
+                                mls_group = Some(
+                                    provider
+                                        .transaction(|tx_provider| {
+                                            let mut tx_group = group(tx_provider, group_id)?;
+                                            merge_pending_commit(&mut tx_group, tx_provider)?;
+                                            Ok(tx_group)
+                                        })
+                                        .map_err(|e| Error::Storage(e.to_string()))?,
+                                );
                             }
                         } else {
-                            delete_group(group, provider)?;
+                            provider
+                                .transaction(|tx_provider| {
+                                    let mut tx_group = group(tx_provider, group_id)?;
+                                    delete_group(&mut tx_group, tx_provider)
+                                })
+                                .map_err(|e| Error::Storage(e.to_string()))?;
                             result.deleted_groups.push(group_id.to_owned());
                             let _ = delete_group_status(&conn, group_id);
                             group_deleted = true;
@@ -291,12 +347,36 @@ pub fn process_all_messages(
                 GroupPendingOperation::UpdateTree => {
                     if let Some(msg) = first_message {
                         if !own_member_id.contains(&msg.sender) {
-                            clear_pending_commit(group, provider)?;
+                            mls_group = Some(
+                                provider
+                                    .transaction(|tx_provider| {
+                                        let mut tx_group = group(tx_provider, group_id)?;
+                                        clear_pending_commit(&mut tx_group, tx_provider)?;
+                                        Ok(tx_group)
+                                    })
+                                    .map_err(|e| Error::Storage(e.to_string()))?,
+                            );
                         } else {
-                            merge_pending_commit(group, provider)?;
+                            mls_group = Some(
+                                provider
+                                    .transaction(|tx_provider| {
+                                        let mut tx_group = group(tx_provider, group_id)?;
+                                        merge_pending_commit(&mut tx_group, tx_provider)?;
+                                        Ok(tx_group)
+                                    })
+                                    .map_err(|e| Error::Storage(e.to_string()))?,
+                            );
                         }
                     } else {
-                        clear_pending_commit(group, provider)?;
+                        mls_group = Some(
+                            provider
+                                .transaction(|tx_provider| {
+                                    let mut tx_group = group(tx_provider, group_id)?;
+                                    clear_pending_commit(&mut tx_group, tx_provider)?;
+                                    Ok(tx_group)
+                                })
+                                .map_err(|e| Error::Storage(e.to_string()))?,
+                        );
                     }
 
                     let _ =
@@ -346,25 +426,18 @@ pub fn process_all_messages(
             }
         }
 
-        let mut signer = match mls_group.as_ref() {
-            Some(g) => match group_signer(g, provider) {
-                Ok(s) => Some(s),
-                Err(err) => {
-                    emit(format!("get signer error, group {}: {}", group_id, err));
-                    None
-                }
-            },
-            None => None,
-        };
-
         // Process all messages
         for msg in &messages_of_group.messages {
             match msg.message_type {
                 MessageType::Welcome => {
                     emit(format!("process welcome, group {}", group_id));
-                    match process_welcome(provider, &msg.blob, join_config) {
+                    match provider
+                        .transaction(|tx_provider| {
+                            process_welcome(tx_provider, &msg.blob, join_config)
+                        })
+                        .map_err(|e| Error::Storage(e.to_string()))
+                    {
                         Ok(new_group) => {
-                            signer = group_signer(&new_group, provider).ok();
                             mls_group = Some(new_group);
                         }
                         Err(err) => {
@@ -380,11 +453,25 @@ pub fn process_all_messages(
                         "start process commit, group {}, epoch {}",
                         group_id, msg.epoch
                     ));
-                    if let Some(group) = &mut mls_group {
-                        if let Some(signer) = &signer {
-                            if let Err(err) =
-                                process_operation_message(group, provider, signer, &msg.blob)
-                            {
+                    if mls_group.is_some() {
+                        match provider
+                            .transaction(|tx_provider| {
+                                let mut tx_group = group(tx_provider, group_id)?;
+                                let tx_signer = group_signer(&tx_group, tx_provider)?;
+                                let _ = process_operation_message(
+                                    &mut tx_group,
+                                    tx_provider,
+                                    &tx_signer,
+                                    &msg.blob,
+                                )?;
+                                Ok(tx_group)
+                            })
+                            .map_err(|e| Error::Storage(e.to_string()))
+                        {
+                            Ok(updated_group) => {
+                                mls_group = Some(updated_group);
+                            }
+                            Err(err) => {
                                 emit(format!("process commit error, group {}: {}", group_id, err));
                             }
                         }
@@ -462,17 +549,20 @@ pub fn create_custom_proposal(
     group_id: &str,
     request: CreateCustomProposalArgs,
 ) -> Vec<u8> {
-    serde_json::to_vec(&CustomProposal {
+    let proposal = CustomProposal {
         mls_client_id: mls_client_id.to_owned(),
-        mls_fingerprint: request.mls_fingerprint.to_owned(),
+        mls_fingerprint: request.mls_fingerprint,
         group_id: group_id.to_owned(),
         proposal_type: request.custom_proposal_type,
-    })
-    .unwrap_or_default()
+    };
+
+    rkyv::to_bytes::<rkyv::rancor::Error>(&proposal)
+        .map(|bytes| bytes.into_vec())
+        .unwrap_or_default()
 }
 
 pub fn process_custom_proposal(custom_proposal: &[u8]) -> Option<CustomProposal> {
-    serde_json::from_slice::<CustomProposal>(custom_proposal).ok()
+    rkyv::from_bytes::<CustomProposal, rkyv::rancor::Error>(custom_proposal).ok()
 }
 
 fn get_first_message(

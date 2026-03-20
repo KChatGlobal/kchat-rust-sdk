@@ -1,7 +1,4 @@
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-};
+use std::marker::PhantomData;
 
 use openmls_traits::storage::{Entity, Key};
 use rusqlite::{OptionalExtension, params};
@@ -9,6 +6,7 @@ use rusqlite::{OptionalExtension, params};
 use crate::{
     STORAGE_PROVIDER_VERSION,
     codec::Codec,
+    storage_provider::SqliteConnectionPool,
     wrappers::{EntityRefWrapper, EntityWrapper, KeyRefWrapper},
 };
 
@@ -21,11 +19,32 @@ impl<PskBundle: Entity<STORAGE_PROVIDER_VERSION>> StorablePskBundle<PskBundle> {
     }
 
     pub(super) fn load<C: Codec, PskId: Key<STORAGE_PROVIDER_VERSION>>(
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
         psk_id: &PskId,
     ) -> Result<Option<PskBundle>, rusqlite::Error> {
-        let connection = connection.lock().unwrap();
-        let mut stmt = connection.prepare(
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
+            "SELECT psk_bundle
+                FROM openmls_psks
+                WHERE psk_id = ?1
+                    AND provider_version = ?2",
+        )?;
+        stmt.query_row(
+            params![
+                KeyRefWrapper::<C, _>(psk_id, PhantomData),
+                STORAGE_PROVIDER_VERSION
+            ],
+            Self::from_row::<C>,
+        )
+        .map(|x| x.0)
+        .optional()
+    }
+
+    pub(super) fn load_in_tx<C: Codec, PskId: Key<STORAGE_PROVIDER_VERSION>>(
+        tx: &rusqlite::Transaction<'_>,
+        psk_id: &PskId,
+    ) -> Result<Option<PskBundle>, rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
             "SELECT psk_bundle
                 FROM openmls_psks
                 WHERE psk_id = ?1
@@ -50,18 +69,36 @@ pub(super) struct StorablePskBundleRef<'a, PskBundle: Entity<STORAGE_PROVIDER_VE
 impl<PskBundle: Entity<STORAGE_PROVIDER_VERSION>> StorablePskBundleRef<'_, PskBundle> {
     pub(super) fn store<C: Codec, PskId: Key<STORAGE_PROVIDER_VERSION>>(
         &self,
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
         psk_id: &PskId,
     ) -> Result<(), rusqlite::Error> {
-        connection.lock().unwrap().execute(
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
             "INSERT OR REPLACE INTO openmls_psks (psk_id, psk_bundle, provider_version)
             VALUES (?1, ?2, ?3)",
-            params![
-                KeyRefWrapper::<C, _>(psk_id, PhantomData),
-                EntityRefWrapper::<C, _>(self.0, PhantomData),
-                STORAGE_PROVIDER_VERSION
-            ],
         )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(psk_id, PhantomData),
+            EntityRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
+        Ok(())
+    }
+
+    pub(super) fn store_in_tx<C: Codec, PskId: Key<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        psk_id: &PskId,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
+            "INSERT OR REPLACE INTO openmls_psks (psk_id, psk_bundle, provider_version)
+            VALUES (?1, ?2, ?3)",
+        )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(psk_id, PhantomData),
+            EntityRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
         Ok(())
     }
 }
@@ -71,17 +108,34 @@ pub(super) struct StorablePskIdRef<'a, PskId: Key<STORAGE_PROVIDER_VERSION>>(pub
 impl<PskId: Key<STORAGE_PROVIDER_VERSION>> StorablePskIdRef<'_, PskId> {
     pub(super) fn delete<C: Codec>(
         &self,
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
     ) -> Result<(), rusqlite::Error> {
-        connection.lock().unwrap().execute(
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
             "DELETE FROM openmls_psks
             WHERE psk_id = ?1
                 AND provider_version = ?2",
-            params![
-                KeyRefWrapper::<C, _>(self.0, PhantomData),
-                STORAGE_PROVIDER_VERSION
-            ],
         )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
+        Ok(())
+    }
+
+    pub(super) fn delete_in_tx<C: Codec>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
+            "DELETE FROM openmls_psks
+            WHERE psk_id = ?1
+                AND provider_version = ?2",
+        )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
         Ok(())
     }
 }

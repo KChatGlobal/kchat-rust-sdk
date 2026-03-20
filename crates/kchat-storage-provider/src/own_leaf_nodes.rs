@@ -1,7 +1,4 @@
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-};
+use std::marker::PhantomData;
 
 use openmls_traits::storage::{Entity, Key};
 use rusqlite::params;
@@ -9,7 +6,7 @@ use rusqlite::params;
 use crate::{
     STORAGE_PROVIDER_VERSION,
     codec::Codec,
-    storage_provider::StorableGroupIdRef,
+    storage_provider::{SqliteConnectionPool, StorableGroupIdRef},
     wrappers::{EntityRefWrapper, EntityWrapper, KeyRefWrapper},
 };
 
@@ -22,11 +19,33 @@ impl<LeafNode: Entity<STORAGE_PROVIDER_VERSION>> StorableLeafNode<LeafNode> {
     }
 
     pub(super) fn load<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
         group_id: &GroupId,
     ) -> Result<Vec<LeafNode>, rusqlite::Error> {
-        let connection = connection.lock().unwrap();
-        let mut stmt = connection.prepare(
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
+            "SELECT leaf_node
+            FROM openmls_own_leaf_nodes
+            WHERE group_id = ?
+                AND provider_version = ?",
+        )?;
+        let leaf_nodes = stmt
+            .query_map(
+                params![
+                    KeyRefWrapper::<C, _>(group_id, PhantomData),
+                    STORAGE_PROVIDER_VERSION
+                ],
+                |row| Self::from_row::<C>(row).map(|x| x.0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(leaf_nodes)
+    }
+
+    pub(super) fn load_in_tx<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
+        tx: &rusqlite::Transaction<'_>,
+        group_id: &GroupId,
+    ) -> Result<Vec<LeafNode>, rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
             "SELECT leaf_node
             FROM openmls_own_leaf_nodes
             WHERE group_id = ?
@@ -52,18 +71,36 @@ pub(crate) struct StorableLeafNodeRef<'a, LeafNode: Entity<STORAGE_PROVIDER_VERS
 impl<LeafNode: Entity<STORAGE_PROVIDER_VERSION>> StorableLeafNodeRef<'_, LeafNode> {
     pub(super) fn store<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
         &self,
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
         group_id: &GroupId,
     ) -> Result<(), rusqlite::Error> {
-        connection.lock().unwrap().execute(
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
             "INSERT OR REPLACE INTO openmls_own_leaf_nodes (group_id, leaf_node, provider_version)
             VALUES (?1, ?2, ?3)",
-            params![
-                KeyRefWrapper::<C, _>(group_id, PhantomData),
-                EntityRefWrapper::<C, _>(self.0, PhantomData),
-                STORAGE_PROVIDER_VERSION
-            ],
         )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(group_id, PhantomData),
+            EntityRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
+        Ok(())
+    }
+
+    pub(super) fn store_in_tx<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        group_id: &GroupId,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
+            "INSERT OR REPLACE INTO openmls_own_leaf_nodes (group_id, leaf_node, provider_version)
+            VALUES (?1, ?2, ?3)",
+        )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(group_id, PhantomData),
+            EntityRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
         Ok(())
     }
 }
@@ -71,17 +108,34 @@ impl<LeafNode: Entity<STORAGE_PROVIDER_VERSION>> StorableLeafNodeRef<'_, LeafNod
 impl<GroupId: Key<STORAGE_PROVIDER_VERSION>> StorableGroupIdRef<'_, GroupId> {
     pub(super) fn delete_leaf_nodes<C: Codec>(
         &self,
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
     ) -> Result<(), rusqlite::Error> {
-        connection.lock().unwrap().execute(
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
             "DELETE FROM openmls_own_leaf_nodes
             WHERE group_id = ?
                 AND provider_version = ?",
-            params![
-                KeyRefWrapper::<C, _>(self.0, PhantomData),
-                STORAGE_PROVIDER_VERSION
-            ],
         )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
+        Ok(())
+    }
+
+    pub(super) fn delete_leaf_nodes_in_tx<C: Codec>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
+            "DELETE FROM openmls_own_leaf_nodes
+            WHERE group_id = ?
+                AND provider_version = ?",
+        )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
         Ok(())
     }
 }

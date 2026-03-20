@@ -8,6 +8,7 @@ openmls_traits = { workspace = true }
 thiserror = "2.0"
 serde = { workspace = true }
 log = { version = "0.4" }
+r2d2 = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 refinery = { version = "0.9", features = ["rusqlite", "enums"] }
 

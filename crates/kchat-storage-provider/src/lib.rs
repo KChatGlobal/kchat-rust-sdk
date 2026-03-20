@@ -41,7 +41,9 @@ mod wrappers;
 
 pub use codec::Codec;
 pub use rusqlite::Connection;
-pub use storage_provider::SqliteStorageProvider;
+pub use storage_provider::{
+    SqliteConnectionPool, SqliteStorageProvider, TransactionalStorageProvider,
+};
 
 /// The version of the storage provider. If the `CURRENT_VERSION` of the OpenMLS
 /// storage provider trait changes, the read/write/delete functions of the

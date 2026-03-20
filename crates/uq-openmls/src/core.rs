@@ -182,6 +182,7 @@ pub fn process_welcome<Provider: OpenMlsProvider>(
 
     let staged_welcome = StagedWelcome::build_from_welcome(provider, config, welcome)?
         .replace_old_group()
+        .skip_lifetime_validation()
         .build()?;
 
     Ok(staged_welcome.into_group(provider)?)
@@ -446,7 +447,9 @@ pub fn join_by_external_commit<Provider: OpenMlsProvider>(
     let (credential_with_key, signer) =
         get_credential_with_key(user_id, provider, ciphersuite, public_key)?;
 
-    let builder = MlsGroup::external_commit_builder().with_config(config.clone());
+    let builder = MlsGroup::external_commit_builder()
+        .skip_lifetime_validation()
+        .with_config(config.clone());
     let (_, commit_bundle) = builder
         .build_group(provider, verifiable_group_info, credential_with_key)?
         .load_psks(provider.storage())?

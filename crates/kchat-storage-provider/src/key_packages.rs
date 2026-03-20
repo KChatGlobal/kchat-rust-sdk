@@ -1,7 +1,4 @@
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-};
+use std::marker::PhantomData;
 
 use openmls_traits::storage::{Entity, Key};
 use rusqlite::{OptionalExtension, params};
@@ -9,6 +6,7 @@ use rusqlite::{OptionalExtension, params};
 use crate::{
     STORAGE_PROVIDER_VERSION,
     codec::Codec,
+    storage_provider::SqliteConnectionPool,
     wrappers::{EntityRefWrapper, EntityWrapper, KeyRefWrapper},
 };
 
@@ -21,12 +19,11 @@ impl<KeyPackage: Entity<STORAGE_PROVIDER_VERSION>> StorableKeyPackage<KeyPackage
     }
 
     pub(super) fn load<C: Codec, KeyPackageRef: Key<STORAGE_PROVIDER_VERSION>>(
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
         key_package_ref: &KeyPackageRef,
     ) -> Result<Option<KeyPackage>, rusqlite::Error> {
         connection
-            .lock()
-            .unwrap()
+            .checkout()?
             .query_row(
                 "SELECT key_package
                 FROM openmls_key_packages
@@ -40,6 +37,26 @@ impl<KeyPackage: Entity<STORAGE_PROVIDER_VERSION>> StorableKeyPackage<KeyPackage
             )
             .optional()
     }
+
+    pub(super) fn load_in_tx<C: Codec, KeyPackageRef: Key<STORAGE_PROVIDER_VERSION>>(
+        tx: &rusqlite::Transaction<'_>,
+        key_package_ref: &KeyPackageRef,
+    ) -> Result<Option<KeyPackage>, rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
+            "SELECT key_package
+                FROM openmls_key_packages
+                WHERE key_package_ref = ?1
+                    AND provider_version = ?2",
+        )?;
+        stmt.query_row(
+            params![
+                KeyRefWrapper::<C, _>(key_package_ref, PhantomData),
+                STORAGE_PROVIDER_VERSION
+            ],
+            |row| Self::from_row::<C>(row).map(|x| x.0),
+        )
+        .optional()
+    }
 }
 
 pub(super) struct StorableKeyPackageRef<'a, KeyPackage: Entity<STORAGE_PROVIDER_VERSION>>(
@@ -49,18 +66,36 @@ pub(super) struct StorableKeyPackageRef<'a, KeyPackage: Entity<STORAGE_PROVIDER_
 impl<KeyPackage: Entity<STORAGE_PROVIDER_VERSION>> StorableKeyPackageRef<'_, KeyPackage> {
     pub(super) fn store<C: Codec, KeyPackageRef: Key<STORAGE_PROVIDER_VERSION>>(
         &self,
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
         key_package_ref: &KeyPackageRef,
     ) -> Result<(), rusqlite::Error> {
-        connection.lock().unwrap().execute(
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
             "INSERT OR REPLACE INTO openmls_key_packages (key_package_ref, key_package, provider_version)
             VALUES (?1, ?2, ?3)",
-            params![
-                KeyRefWrapper::<C, _>(key_package_ref, PhantomData),
-                EntityRefWrapper::<C, _>(self.0, PhantomData),
-                STORAGE_PROVIDER_VERSION
-            ],
         )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(key_package_ref, PhantomData),
+            EntityRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
+        Ok(())
+    }
+
+    pub(super) fn store_in_tx<C: Codec, KeyPackageRef: Key<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        key_package_ref: &KeyPackageRef,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
+            "INSERT OR REPLACE INTO openmls_key_packages (key_package_ref, key_package, provider_version)
+            VALUES (?1, ?2, ?3)",
+        )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(key_package_ref, PhantomData),
+            EntityRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
         Ok(())
     }
 }
@@ -72,17 +107,34 @@ pub(super) struct StorableHashRef<'a, KeyPackageRef: Key<STORAGE_PROVIDER_VERSIO
 impl<KeyPackageRef: Key<STORAGE_PROVIDER_VERSION>> StorableHashRef<'_, KeyPackageRef> {
     pub(super) fn delete_key_package<C: Codec>(
         &self,
-        connection: &Arc<Mutex<rusqlite::Connection>>,
+        connection: &SqliteConnectionPool,
     ) -> Result<(), rusqlite::Error> {
-        connection.lock().unwrap().execute(
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
             "DELETE FROM openmls_key_packages
             WHERE key_package_ref = ?1
                 AND provider_version = ?2",
-            params![
-                KeyRefWrapper::<C, _>(self.0, PhantomData),
-                STORAGE_PROVIDER_VERSION
-            ],
         )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
+        Ok(())
+    }
+
+    pub(super) fn delete_key_package_in_tx<C: Codec>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
+            "DELETE FROM openmls_key_packages
+            WHERE key_package_ref = ?1
+                AND provider_version = ?2",
+        )?;
+        stmt.execute(params![
+            KeyRefWrapper::<C, _>(self.0, PhantomData),
+            STORAGE_PROVIDER_VERSION
+        ])?;
         Ok(())
     }
 }

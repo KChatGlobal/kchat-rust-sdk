@@ -191,6 +191,42 @@ pub fn get_group_pending_operation(
     }
 }
 
+pub fn get_group_pending_operations_batch(
+    conn: &GroupStatusConnection,
+    group_ids: &[String],
+) -> Result<HashMap<String, String>, Error> {
+    if group_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let conn = conn.checkout()?;
+    let placeholders = (1..=group_ids.len())
+        .map(|i| format!("?{}", i))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        "SELECT group_id, pending_operation FROM group_statuses WHERE group_id IN ({})",
+        placeholders
+    );
+
+    let mut stmt = conn.prepare(&query)?;
+    let params: Vec<&dyn rusqlite::ToSql> = group_ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::ToSql)
+        .collect();
+
+    let mut rows = stmt.query(params.as_slice())?;
+    let mut result = HashMap::new();
+
+    while let Some(row) = rows.next()? {
+        let group_id: String = row.get(0)?;
+        let pending_op: String = row.get(1)?;
+        result.insert(group_id, pending_op);
+    }
+
+    Ok(result)
+}
+
 pub fn initialize(conn: &GroupStatusConnection) -> Result<(), Error> {
     conn.checkout()?.execute(
         "

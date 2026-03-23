@@ -3,8 +3,8 @@ use std::sync::Arc;
 use kchat_mls::{
     CreateCustomProposalArgs, GroupPendingOperation, GroupStatusConnection,
     OP_JOIN_BY_EXTERNAL_COMMIT, OP_NONE, create_custom_proposal, delete_group_status,
-    get_group_pending_operation, insert_or_update_group_status, open_group_status_connection,
-    process_all_messages,
+    get_group_pending_operation, get_group_pending_operations_batch, insert_or_update_group_status,
+    open_group_status_connection, process_all_messages,
 };
 use openmls::{
     group::{
@@ -885,15 +885,15 @@ impl UqMls {
     pub fn group_epoch(&self, group_id: &str) -> Result<WrappedGroupEpochResult, Error> {
         let pending_operation = get_group_pending_operation(&self.conn, group_id).unwrap_or(None);
 
-        Ok(match core::group(&self.provider, group_id) {
-            Ok(group) => WrappedGroupEpochResult {
+        Ok(match core::group_context(&self.provider, group_id) {
+            Ok(context) => WrappedGroupEpochResult {
                 group_id: group_id.to_owned(),
                 epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
-                    group.epoch().as_u64() as i64 - 1
+                    context.epoch().as_u64() as i64 - 1
                 } else {
-                    group.epoch().as_u64() as i64
+                    context.epoch().as_u64() as i64
                 },
-                tree_hash: group.tree_hash().to_vec(),
+                tree_hash: context.tree_hash().to_vec(),
                 err: None,
                 pending_operation,
             },
@@ -910,16 +910,16 @@ impl UqMls {
     pub fn group_context(&self, group_id: &str) -> Result<WrappedGroupContextResult, Error> {
         let pending_operation = get_group_pending_operation(&self.conn, group_id).unwrap_or(None);
 
-        Ok(match core::group(&self.provider, group_id) {
-            Ok(group) => WrappedGroupContextResult {
+        Ok(match core::group_context(&self.provider, group_id) {
+            Ok(context) => WrappedGroupContextResult {
                 group_id: group_id.to_owned(),
-                current_epoch: group.epoch().as_u64() as i64,
+                current_epoch: context.epoch().as_u64() as i64,
                 pending_epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
-                    group.epoch().as_u64() as i64 - 1
+                    context.epoch().as_u64() as i64 - 1
                 } else {
-                    group.epoch().as_u64() as i64
+                    context.epoch().as_u64() as i64
                 },
-                tree_hash: group.tree_hash().to_vec(),
+                tree_hash: context.tree_hash().to_vec(),
                 err: None,
                 pending_operation,
             },
@@ -938,25 +938,33 @@ impl UqMls {
         &self,
         group_ids: &[String],
     ) -> Result<Vec<WrappedGroupEpochResult>, Error> {
+        let pending_operations = get_group_pending_operations_batch(&self.conn, group_ids)
+            .unwrap_or_else(|_| std::collections::HashMap::new());
+        let join_by_external_commit_op = OP_JOIN_BY_EXTERNAL_COMMIT.to_owned();
+
         Ok(group_ids
             .iter()
             .map(|group_id| {
-                let pending_operation =
-                    get_group_pending_operation(&self.conn, group_id).unwrap_or(None);
-                match core::group(&self.provider, group_id) {
-                    Ok(group) => WrappedGroupEpochResult {
-                        group_id: group_id.to_owned(),
-                        epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
-                            group.epoch().as_u64() as i64 - 1
-                        } else {
-                            group.epoch().as_u64() as i64
-                        },
-                        tree_hash: group.tree_hash().to_vec(),
-                        err: None,
-                        pending_operation,
-                    },
+                let pending_operation = pending_operations.get(group_id).cloned();
+                match core::group_context(&self.provider, group_id) {
+                    Ok(context) => {
+                        let epoch =
+                            if pending_operation.as_ref() == Some(&join_by_external_commit_op) {
+                                context.epoch().as_u64() as i64 - 1
+                            } else {
+                                context.epoch().as_u64() as i64
+                            };
+
+                        WrappedGroupEpochResult {
+                            group_id: group_id.clone(),
+                            epoch,
+                            tree_hash: context.tree_hash().to_vec(),
+                            err: None,
+                            pending_operation,
+                        }
+                    }
                     Err(err) => WrappedGroupEpochResult {
-                        group_id: group_id.to_owned(),
+                        group_id: group_id.clone(),
                         epoch: -1,
                         tree_hash: Vec::new(),
                         err: Some(err.to_string()),
@@ -971,28 +979,35 @@ impl UqMls {
         &self,
         group_ids: &[String],
     ) -> Result<Vec<WrappedGroupContextResult>, Error> {
+        let pending_operations = get_group_pending_operations_batch(&self.conn, group_ids)
+            .unwrap_or_else(|_| std::collections::HashMap::new());
+        let join_by_external_commit_op = OP_JOIN_BY_EXTERNAL_COMMIT.to_owned();
+
         Ok(group_ids
             .iter()
             .map(|group_id| {
-                let pending_operation =
-                    get_group_pending_operation(&self.conn, group_id).unwrap_or(None);
-                match core::group(&self.provider, group_id) {
-                    Ok(group) => WrappedGroupContextResult {
-                        group_id: group_id.to_owned(),
-                        current_epoch: group.epoch().as_u64() as i64,
-                        pending_epoch: if pending_operation
-                            == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned())
-                        {
-                            group.epoch().as_u64() as i64 - 1
-                        } else {
-                            group.epoch().as_u64() as i64
-                        },
-                        tree_hash: group.tree_hash().to_vec(),
-                        err: None,
-                        pending_operation,
-                    },
+                let pending_operation = pending_operations.get(group_id).cloned();
+                match core::group_context(&self.provider, group_id) {
+                    Ok(context) => {
+                        let current_epoch = context.epoch().as_u64() as i64;
+                        let pending_epoch =
+                            if pending_operation.as_ref() == Some(&join_by_external_commit_op) {
+                                current_epoch - 1
+                            } else {
+                                current_epoch
+                            };
+
+                        WrappedGroupContextResult {
+                            group_id: group_id.clone(),
+                            current_epoch,
+                            pending_epoch,
+                            tree_hash: context.tree_hash().to_vec(),
+                            err: None,
+                            pending_operation,
+                        }
+                    }
                     Err(err) => WrappedGroupContextResult {
-                        group_id: group_id.to_owned(),
+                        group_id: group_id.clone(),
                         current_epoch: -1,
                         pending_epoch: -1,
                         tree_hash: Vec::new(),

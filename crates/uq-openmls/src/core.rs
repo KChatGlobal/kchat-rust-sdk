@@ -1,7 +1,7 @@
 use openmls::{
     group::{
-        GroupId, Member, MlsGroup, MlsGroupCreateConfig, MlsGroupJoinConfig, ProposalStore,
-        PublicGroup, StagedWelcome,
+        GroupContext, GroupId, Member, MlsGroup, MlsGroupCreateConfig, MlsGroupJoinConfig,
+        ProposalStore, PublicGroup, StagedWelcome,
     },
     messages::proposals::Proposal as MlsProposal,
     prelude::{
@@ -14,7 +14,7 @@ use openmls::{
     },
 };
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_traits::OpenMlsProvider;
+use openmls_traits::{OpenMlsProvider, public_storage::PublicStorageProvider};
 
 use crate::{
     error::Error,
@@ -668,6 +668,17 @@ pub fn group<Provider: OpenMlsProvider>(
     };
 
     Ok(group)
+}
+
+pub fn group_context<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+) -> Result<GroupContext, Error> {
+    Ok(provider
+        .storage()
+        .group_context(&GroupId::from_slice(group_id.as_bytes()))
+        .map_err(|e| Error::Storage(e.to_string()))?
+        .ok_or(Error::GroupIsNotExisted)?)
 }
 
 /// Delete group

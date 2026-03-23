@@ -4,6 +4,7 @@
 # IDEs
 .idea/
 .vscode/
+.kiro/
 
 # Rust build artifacts
 target/
@@ -26,3 +27,5 @@ ios/
 ios.zip
 android/
 android.zip
+
+aidlc-docs/

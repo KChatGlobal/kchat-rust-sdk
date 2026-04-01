@@ -69,6 +69,7 @@ pub struct AddMembersResult {
     pub welcome: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: i64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 impl From<core::AddMembersResult> for AddMembersResult {
@@ -78,6 +79,7 @@ impl From<core::AddMembersResult> for AddMembersResult {
             welcome: value.welcome,
             group_info: value.group_info,
             current_epoch: value.current_epoch as i64,
+            pre_tree_hash: value.pre_tree_hash,
         }
     }
 }
@@ -87,6 +89,7 @@ pub struct RemoveMembersResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: i64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 impl From<core::RemoveMembersResult> for RemoveMembersResult {
@@ -95,6 +98,7 @@ impl From<core::RemoveMembersResult> for RemoveMembersResult {
             commit: value.commit,
             group_info: value.group_info,
             current_epoch: value.current_epoch as i64,
+            pre_tree_hash: value.pre_tree_hash,
         }
     }
 }
@@ -162,6 +166,7 @@ pub struct JoinByExternalCommitResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: i64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 impl From<core::JoinByExternalCommitResult> for JoinByExternalCommitResult {
@@ -170,6 +175,7 @@ impl From<core::JoinByExternalCommitResult> for JoinByExternalCommitResult {
             commit: value.commit,
             group_info: value.group_info,
             current_epoch: value.current_epoch as i64,
+            pre_tree_hash: value.pre_tree_hash,
         }
     }
 }
@@ -205,6 +211,7 @@ pub struct UpdateLeafNodeResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: i64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 impl From<core::UpdateLeafNodeResult> for UpdateLeafNodeResult {
@@ -213,6 +220,7 @@ impl From<core::UpdateLeafNodeResult> for UpdateLeafNodeResult {
             commit: value.commit,
             group_info: value.group_info,
             current_epoch: value.current_epoch as i64,
+            pre_tree_hash: value.pre_tree_hash,
         }
     }
 }
@@ -357,6 +365,7 @@ pub struct ReAddResult {
     pub welcome: Option<Vec<u8>>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: i64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 impl From<core::ReAddResult> for ReAddResult {
@@ -366,6 +375,7 @@ impl From<core::ReAddResult> for ReAddResult {
             commit: value.commit,
             group_info: value.group_info,
             current_epoch: value.current_epoch as i64,
+            pre_tree_hash: value.pre_tree_hash,
         }
     }
 }

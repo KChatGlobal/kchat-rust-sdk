@@ -3,15 +3,19 @@ use openmls::{
         GroupId, MlsGroup, MlsGroupCreateConfig, MlsGroupJoinConfig,
         PURE_CIPHERTEXT_WIRE_FORMAT_POLICY,
     },
-    prelude::{BasicCredential, SenderRatchetConfiguration},
+    prelude::{
+        BasicCredential, Capabilities, Ciphersuite, CredentialWithKey, ExtensionType, KeyPackage,
+        Lifetime, SenderRatchetConfiguration, tls_codec::Serialize,
+    },
 };
+use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
 use uq_openmls::{
     core::{
         AddMembersResult, DEFAULT_CIPHERSUITE, JoinByExternalCommitResult, ReAddResult,
-        RemoveMembersResult, create_group, generate_key_package, join_by_external_commit,
-        process_welcome,
+        RemoveMembersResult, create_group, encrypt_message as core_encrypt_message,
+        generate_key_package, group_signer, join_by_external_commit, process_welcome,
     },
     error::Error,
 };
@@ -845,7 +849,11 @@ fn test_readd() {
 
     let group_info = export_group_info(&alice_provider, group_id).unwrap();
 
-    let JoinByExternalCommitResult { commit, .. } = join_by_external_commit(
+    let JoinByExternalCommitResult {
+        commit,
+        pre_tree_hash,
+        ..
+    } = join_by_external_commit(
         &e_provider,
         e_user_id,
         &group_info,
@@ -856,6 +864,13 @@ fn test_readd() {
         None,
     )
     .unwrap();
+
+    // Verify that pre_tree_hash was captured (should not be empty for valid group)
+    assert!(
+        !pre_tree_hash.is_empty(),
+        "pre_tree_hash should be captured"
+    );
+
     delete_group(&e_provider, group_id).unwrap();
 
     process_operation_message(&alice_provider, group_id, &commit).unwrap();
@@ -981,4 +996,266 @@ fn test_readd() {
 
     assert_eq!(alice_group.tree_hash(), danny_group.tree_hash());
     assert_eq!(alice_group.tree_hash(), bob_group.tree_hash());
+}
+
+#[test]
+fn test_key_package_lifetime() {
+    // Init alice device.
+    let alice_provider = OpenMlsRustCrypto::default();
+    let alice_user_id = "alice";
+
+    // Init bob device
+    let bob_provider = OpenMlsRustCrypto::default();
+    let bob_user_id = "bob";
+
+    // Generate bob key package
+    let bob_key_package = generate_key_package_with_lifetime(
+        bob_user_id,
+        &bob_provider,
+        DEFAULT_CIPHERSUITE,
+        true,
+        None,
+        1,
+    )
+    .expect("should return signature key pair");
+
+    // Alice create group
+    let group_id = "group_1";
+    create_group(
+        &alice_provider,
+        alice_user_id,
+        group_id,
+        DEFAULT_CIPHERSUITE,
+        &MlsGroupCreateConfig::builder()
+            .ciphersuite(DEFAULT_CIPHERSUITE)
+            .use_ratchet_tree_extension(true)
+            .build(),
+        None,
+    )
+    .expect("should create group success");
+
+    // Alice add Bob
+    let AddMembersResult { welcome, .. } =
+        add_members(&alice_provider, group_id, &[bob_key_package.clone()])
+            .expect("should add Bob to group success");
+    merge_pending_commit(&alice_provider, group_id).expect("should merge pending commit success");
+
+    // Bob process welcome
+    let bob_group = process_welcome(
+        &bob_provider,
+        &welcome,
+        &MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .build(),
+    )
+    .expect("should process `welcome` success");
+
+    let alice_group = MlsGroup::load(
+        alice_provider.storage(),
+        &GroupId::from_slice(group_id.as_bytes()),
+    )
+    .expect("should load group from storage success")
+    .expect("should be returned Option::Some");
+
+    assert_eq!(alice_group.members().count(), bob_group.members().count());
+    assert_eq!(alice_group.members().count(), 2);
+
+    // Init charlie device
+    let charlie_provider = OpenMlsRustCrypto::default();
+    let charlie_user_id = "charlie";
+
+    // Generate charlie key package
+    let charlie_key_package = generate_key_package(
+        charlie_user_id,
+        &charlie_provider,
+        DEFAULT_CIPHERSUITE,
+        false,
+        None,
+    )
+    .expect("should generate key package success");
+
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let AddMembersResult { .. } =
+        add_members(&alice_provider, group_id, &[charlie_key_package]).unwrap();
+    merge_pending_commit(&alice_provider, group_id).expect("should merge pending commit success");
+
+    let group_info = export_group_info(&alice_provider, group_id).unwrap();
+
+    let danny_provider = OpenMlsRustCrypto::default();
+    let danny_user_id = "danny";
+
+    // Danny joins via external commit
+    // Even though Bob's key package is expired, we should still get the pre_tree_hash
+    let JoinByExternalCommitResult { pre_tree_hash, .. } = join_by_external_commit(
+        &danny_provider,
+        danny_user_id,
+        &group_info,
+        DEFAULT_CIPHERSUITE,
+        &MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .build(),
+        None,
+    )
+    .unwrap();
+
+    // Verify tree hash was captured (critical for server verification)
+    assert!(
+        !pre_tree_hash.is_empty(),
+        "pre_tree_hash must be captured even with expired key packages"
+    );
+
+    println!(
+        "Successfully captured tree hash: {} bytes",
+        pre_tree_hash.len()
+    );
+
+    // Alice self remove from group
+    remove_members(&alice_provider, group_id, &[bob_user_id]).unwrap();
+    merge_pending_commit(&alice_provider, group_id).unwrap();
+
+    let e_provider = OpenMlsRustCrypto::default();
+    let e_user_id = "e";
+    let e_key_package =
+        generate_key_package(e_user_id, &e_provider, DEFAULT_CIPHERSUITE, false, None)
+            .expect("should generate key package success");
+
+    let AddMembersResult { .. } =
+        add_members(&alice_provider, group_id, &[bob_key_package, e_key_package])
+            .expect("should add Bob to group success");
+    merge_pending_commit(&alice_provider, group_id).expect("should merge pending commit success");
+}
+
+#[test]
+fn test_forward_secrecy_error() {
+    // This test demonstrates the "requested secret was deleted to preserve forward secrecy" error
+    // which occurs when trying to decrypt the same message twice
+
+    // Init alice and bob
+    let alice_provider = OpenMlsRustCrypto::default();
+    let alice_user_id = "alice";
+    let bob_provider = OpenMlsRustCrypto::default();
+    let bob_user_id = "bob";
+
+    // Generate bob key package
+    let bob_key_package =
+        generate_key_package(bob_user_id, &bob_provider, DEFAULT_CIPHERSUITE, false, None)
+            .expect("should generate key package");
+
+    // Alice creates group
+    let group_id = "group_forward_secrecy";
+    create_group(
+        &alice_provider,
+        alice_user_id,
+        group_id,
+        DEFAULT_CIPHERSUITE,
+        &MlsGroupCreateConfig::builder()
+            .ciphersuite(DEFAULT_CIPHERSUITE)
+            .use_ratchet_tree_extension(true)
+            .build(),
+        None,
+    )
+    .expect("should create group");
+
+    // Alice adds Bob
+    let AddMembersResult { welcome, .. } =
+        add_members(&alice_provider, group_id, &[bob_key_package]).unwrap();
+    merge_pending_commit(&alice_provider, group_id).unwrap();
+
+    // Bob processes welcome
+    let _ = process_welcome(
+        &bob_provider,
+        &welcome,
+        &MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .build(),
+    )
+    .expect("should process welcome");
+
+    // Bob encrypts a message
+    let mut bob_group_1 = MlsGroup::load(
+        bob_provider.storage(),
+        &GroupId::from_slice(group_id.as_bytes()),
+    )
+    .unwrap()
+    .unwrap();
+
+    let mut bob_group_2 = MlsGroup::load(
+        bob_provider.storage(),
+        &GroupId::from_slice(group_id.as_bytes()),
+    )
+    .unwrap()
+    .unwrap();
+
+    let signer = group_signer(&bob_group_1, &bob_provider).unwrap();
+
+    let msg1 = core_encrypt_message(&mut bob_group_1, &bob_provider, &signer, b"msg1").unwrap();
+    let msg2 = core_encrypt_message(&mut bob_group_2, &bob_provider, &signer, b"msg2").unwrap();
+
+    let r1 = process_application_message(&alice_provider, group_id, &msg1);
+    println!("{:?}", r1);
+
+    let r2 = process_application_message(&alice_provider, group_id, &msg2);
+    println!("{:?}", r2);
+}
+
+pub fn generate_key_package_with_lifetime<Provider: OpenMlsProvider>(
+    user_id: &str,
+    provider: &Provider,
+    ciphersuite: Ciphersuite,
+    last_resort: bool,
+    public_key: Option<Vec<u8>>,
+    lifetime: u64,
+) -> Result<Vec<u8>, Error> {
+    let (credential_with_key, signer) =
+        get_credential_with_key(user_id, provider, ciphersuite, public_key)?;
+
+    let mut key_package_builder = KeyPackage::builder();
+
+    if last_resort {
+        key_package_builder = key_package_builder
+            .leaf_node_capabilities(Capabilities::new(
+                None,
+                None,
+                Some(&[ExtensionType::LastResort]),
+                None,
+                None,
+            ))
+            .key_package_lifetime(Lifetime::new(lifetime))
+            .mark_as_last_resort();
+    }
+
+    let key_package = key_package_builder
+        .build(ciphersuite, provider, &signer, credential_with_key)?
+        .key_package()
+        .clone();
+
+    Ok(key_package.tls_serialize_detached()?)
+}
+
+fn get_credential_with_key<Provider: OpenMlsProvider>(
+    user_id: &str,
+    provider: &Provider,
+    ciphersuite: Ciphersuite,
+    public_key: Option<Vec<u8>>,
+) -> Result<(CredentialWithKey, SignatureKeyPair), Error> {
+    let credential = BasicCredential::new(user_id.into());
+    let signature_scheme = ciphersuite.signature_algorithm();
+    let signature_key = if let Some(public_key) = public_key {
+        SignatureKeyPair::read(provider.storage(), &public_key, signature_scheme)
+            .ok_or(Error::MissingSignatureKeyPair)?
+    } else {
+        SignatureKeyPair::new(signature_scheme)?
+    };
+
+    let credential_with_key = CredentialWithKey {
+        credential: credential.into(),
+        signature_key: signature_key.to_public_vec().into(),
+    };
+
+    signature_key
+        .store(provider.storage())
+        .map_err(|e| Error::Storage(e.to_string()))?;
+
+    Ok((credential_with_key, signature_key))
 }

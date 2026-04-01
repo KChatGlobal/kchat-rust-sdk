@@ -6,9 +6,9 @@ use openmls::{
     messages::proposals::Proposal as MlsProposal,
     prelude::{
         BasicCredential, Capabilities, Ciphersuite, ExtensionType, KeyPackage, KeyPackageIn,
-        LeafNodeIndex, LeafNodeParameters, Lifetime, MlsMessageBodyIn, MlsMessageBodyOut,
-        MlsMessageIn, ProcessedMessageContent, Proposal as OpenMlsProposal, ProtocolVersion,
-        Sender,
+        KeyPackageVerifyError, LeafNodeIndex, LeafNodeParameters, Lifetime, MlsMessageBodyIn,
+        MlsMessageBodyOut, MlsMessageIn, ProcessedMessageContent, Proposal as OpenMlsProposal,
+        ProtocolVersion, Sender,
         group_info::VerifiableGroupInfo,
         tls_codec::{Deserialize as _, Serialize as _},
     },
@@ -118,6 +118,7 @@ pub struct AddMembersResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: u64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 /// Adds members to the group.
@@ -137,9 +138,25 @@ pub fn add_members<Provider: OpenMlsProvider>(
 ) -> Result<AddMembersResult, Error> {
     let mut key_packages = Vec::new();
     for bytes in key_package_ins {
-        let key_package = KeyPackageIn::tls_deserialize_exact(bytes)?
-            .validate(provider.crypto(), ProtocolVersion::default())?;
-        key_packages.push(key_package);
+        match KeyPackageIn::tls_deserialize_exact(bytes)?
+            .validate(provider.crypto(), ProtocolVersion::default())
+        {
+            Ok(key_package) => {
+                key_packages.push(key_package);
+            }
+            Err(err) => {
+                if err == KeyPackageVerifyError::InvalidLifetime {
+                    continue;
+                }
+                return Err(err.into());
+            }
+        }
+    }
+
+    if key_packages.is_empty() {
+        return Err(Error::AddMembers(
+            "The lifetime of the all leaf node is not valid.".to_owned(),
+        ));
     }
 
     let identities = get_identity_from_key_packages(&key_packages);
@@ -149,6 +166,7 @@ pub fn add_members<Provider: OpenMlsProvider>(
         return Err(Error::SomeMembersAlreadyExistedInGroup);
     }
 
+    let pre_tree_hash = group.tree_hash().to_owned();
     let (commit, welcome, group_info) = group.add_members(provider, signer, &key_packages)?;
     let group_info = if let Some(group_info) = group_info {
         Some(group_info.tls_serialize_detached()?)
@@ -161,6 +179,7 @@ pub fn add_members<Provider: OpenMlsProvider>(
         commit: commit.tls_serialize_detached()?,
         group_info,
         current_epoch: group.epoch().as_u64(),
+        pre_tree_hash,
     })
 }
 
@@ -397,6 +416,7 @@ pub struct JoinByExternalCommitResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: u64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 /// Join an existing group through an External Commit.
@@ -424,24 +444,38 @@ pub fn join_by_external_commit<Provider: OpenMlsProvider>(
         return Err(Error::InvalidGroupInfo);
     };
 
-    let Some(ratchet_tree) = verifiable_group_info.extensions().ratchet_tree() else {
+    let Some(ratchet_tree_extension) = verifiable_group_info.extensions().ratchet_tree() else {
         return Err(Error::MissingRatchetTree);
     };
-    let (public_group, _) = PublicGroup::from_external(
+
+    let full_bytes = verifiable_group_info.tls_serialize_detached()?;
+
+    // The TLS structure of VerifiableGroupInfo is:
+    // GroupInfoTBS (payload) || Signature
+    // GroupInfoTBS structure is:
+    // GroupContext || Extensions || ConfirmationTag || LeafNodeIndex
+    //
+    // We need to parse just the GroupContext from the beginning
+    let mut cursor = full_bytes.as_slice();
+    let group_context = GroupContext::tls_deserialize(&mut cursor)?;
+    let pre_tree_hash = group_context.tree_hash().to_owned();
+
+    // Check if user is already a member (use PublicGroup if available, skip if it fails)
+    if let Ok((public_group, _)) = PublicGroup::from_external(
         provider.crypto(),
         provider.storage(),
-        ratchet_tree.ratchet_tree().to_owned(),
+        ratchet_tree_extension.ratchet_tree().to_owned(),
         verifiable_group_info.clone(),
         ProposalStore::new(),
-    )?;
-
-    if !find_members_by_identity(
-        &public_group.members().collect::<Vec<Member>>(),
-        &[user_id.as_bytes()],
-    )
-    .is_empty()
-    {
-        return Err(Error::CredentialIsExisted);
+    ) {
+        if !find_members_by_identity(
+            &public_group.members().collect::<Vec<Member>>(),
+            &[user_id.as_bytes()],
+        )
+        .is_empty()
+        {
+            return Err(Error::CredentialIsExisted);
+        }
     }
 
     let (credential_with_key, signer) =
@@ -450,7 +484,7 @@ pub fn join_by_external_commit<Provider: OpenMlsProvider>(
     let builder = MlsGroup::external_commit_builder()
         .skip_lifetime_validation()
         .with_config(config.clone());
-    let (_, commit_bundle) = builder
+    let (group, commit_bundle) = builder
         .build_group(provider, verifiable_group_info, credential_with_key)?
         .load_psks(provider.storage())?
         .build(provider.rand(), provider.crypto(), &signer, |_| true)?
@@ -467,7 +501,8 @@ pub fn join_by_external_commit<Provider: OpenMlsProvider>(
     Ok(JoinByExternalCommitResult {
         commit: commit.tls_serialize_detached()?,
         group_info,
-        current_epoch: public_group.group_context().epoch().as_u64(),
+        current_epoch: group.epoch().as_u64() - 1,
+        pre_tree_hash,
     })
 }
 
@@ -476,6 +511,7 @@ pub struct RemoveMembersResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: u64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 /// Removes members from the group.
@@ -496,6 +532,7 @@ pub fn remove_members<Provider: OpenMlsProvider>(
     .map(|member| member.index)
     .collect::<Vec<LeafNodeIndex>>();
 
+    let pre_tree_hash = group.tree_hash().to_owned();
     let (commit, _, group_info) =
         group.remove_members(provider, signer, &member_leaf_node_indices)?;
     let group_info = if let Some(group_info) = group_info {
@@ -508,6 +545,7 @@ pub fn remove_members<Provider: OpenMlsProvider>(
         commit: commit.tls_serialize_detached()?,
         group_info,
         current_epoch: group.epoch().as_u64(),
+        pre_tree_hash,
     })
 }
 
@@ -537,6 +575,7 @@ pub struct UpdateLeafNodeResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: u64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 /// Updates the own leaf node.
@@ -545,6 +584,7 @@ pub fn update_leaf_node<Provider: OpenMlsProvider>(
     provider: &Provider,
     signer: &SignatureKeyPair,
 ) -> Result<UpdateLeafNodeResult, Error> {
+    let pre_tree_hash = group.tree_hash().to_owned();
     let commit_bundle = group.self_update(provider, signer, LeafNodeParameters::default())?;
 
     Ok(UpdateLeafNodeResult {
@@ -555,6 +595,7 @@ pub fn update_leaf_node<Provider: OpenMlsProvider>(
             None
         },
         current_epoch: group.epoch().as_u64(),
+        pre_tree_hash,
     })
 }
 
@@ -697,6 +738,7 @@ pub struct ReAddResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
     pub current_epoch: u64,
+    pub pre_tree_hash: Vec<u8>,
 }
 
 /// Re-add
@@ -715,6 +757,8 @@ pub fn readd<Provider: OpenMlsProvider>(
     .into_iter()
     .map(|member| member.index.u32())
     .collect::<Vec<u32>>();
+
+    let pre_tree_hash = group.tree_hash().to_owned();
 
     let mut our_partition = Vec::new();
     for member in group.members() {
@@ -761,5 +805,6 @@ pub fn readd<Provider: OpenMlsProvider>(
         commit: commit.tls_serialize_detached()?,
         group_info,
         current_epoch: group.epoch().as_u64(),
+        pre_tree_hash,
     })
 }

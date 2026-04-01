@@ -1324,6 +1324,8 @@ dependencies = [
  "rkyv",
  "rusqlite",
  "secrecy",
+ "serde",
+ "serde_json",
  "thiserror",
  "uq-openmls",
 ]

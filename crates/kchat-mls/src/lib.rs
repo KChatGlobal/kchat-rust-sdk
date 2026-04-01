@@ -122,7 +122,9 @@ impl Into<String> for GroupPendingOperation {
     }
 }
 
-#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, serde::Serialize, serde::Deserialize,
+)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct CustomProposal {
     pub mls_client_id: String,
@@ -131,7 +133,18 @@ pub struct CustomProposal {
     pub proposal_type: CustomProposalType,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum CustomProposalType {
     ReAdd,
@@ -592,13 +605,19 @@ pub fn create_custom_proposal(
         proposal_type: request.custom_proposal_type,
     };
 
-    rkyv::to_bytes::<rkyv::rancor::Error>(&proposal)
-        .map(|bytes| bytes.into_vec())
-        .unwrap_or_default()
+    // rkyv::to_bytes::<rkyv::rancor::Error>(&proposal)
+    //     .map(|bytes| bytes.into_vec())
+    //     .unwrap_or_default()
+
+    serde_json::to_vec(&proposal).unwrap_or_default()
 }
 
 pub fn process_custom_proposal(custom_proposal: &[u8]) -> Option<CustomProposal> {
-    rkyv::from_bytes::<CustomProposal, rkyv::rancor::Error>(custom_proposal).ok()
+    if let Ok(raw) = rkyv::from_bytes::<CustomProposal, rkyv::rancor::Error>(custom_proposal) {
+        Some(raw)
+    } else {
+        serde_json::from_slice::<CustomProposal>(custom_proposal).ok()
+    }
 }
 
 fn get_first_message(

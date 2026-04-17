@@ -36,6 +36,15 @@ pub struct SqliteStorageProvider<C: Codec> {
     _codec: PhantomData<C>,
 }
 
+impl<C: Codec> Clone for SqliteStorageProvider<C> {
+    fn clone(&self) -> Self {
+        Self {
+            connection: self.connection.clone(),
+            _codec: PhantomData,
+        }
+    }
+}
+
 pub struct TransactionalStorageProvider<'tx, C: Codec> {
     tx: &'tx rusqlite::Transaction<'tx>,
     _codec: PhantomData<C>,
@@ -109,6 +118,7 @@ impl SqliteConnectionPool {
     {
         let mut connection = self.checkout()?;
         let tx = connection.transaction()?;
+        tx.busy_timeout(Duration::from_millis(5000))?;
         let result = f(&tx)?;
         tx.commit()?;
         Ok(result)

@@ -9,10 +9,11 @@ use openmls::{
     group::{MlsGroup, MlsGroupJoinConfig},
     prelude::{BasicCredential, Credential},
 };
+use openmls_traits::OpenMlsProvider;
 use rusqlite::{Connection, params};
 use uq_openmls::{
     core::{
-        Proposal, clear_pending_commit, delete_group, group, group_signer, merge_pending_commit,
+        Proposal, clear_pending_commit, delete_group, group, merge_pending_commit,
         process_operation_message, process_proposal_message, process_welcome,
     },
     error::Error,
@@ -39,6 +40,13 @@ pub fn open_group_status_connection(path: &str) -> Result<GroupStatusConnection,
     });
     initialize(&conn)?;
     Ok(conn)
+}
+
+#[inline]
+fn emit_log(log: Option<&dyn Fn(String)>, build_msg: impl FnOnce() -> String) {
+    if let Some(cb) = log {
+        cb(build_msg());
+    }
 }
 
 pub struct ProcessAllMessagesArgs {
@@ -254,10 +262,25 @@ pub fn initialize(conn: &GroupStatusConnection) -> Result<(), Error> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct GroupResult {
     pub group_id: String,
     pub members_to_remove: Vec<MemberInfo>,
     pub members_to_readd: Vec<MemberInfo>,
+    pub error: Option<GroupError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupErrorCode {
+    Storage,
+    Aead,
+    ProcessCommit,
+}
+
+#[derive(Debug, Clone)]
+pub struct GroupError {
+    pub error_code: GroupErrorCode,
+    pub error_message: String,
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -278,13 +301,7 @@ pub fn process_all_messages(
     join_config: &MlsGroupJoinConfig,
     log: Option<&dyn Fn(String)>,
 ) -> Result<ProcessAllMessagesResult, Error> {
-    let emit = |msg: String| {
-        if let Some(cb) = &log {
-            cb(msg);
-        }
-    };
-
-    emit("start process all messages".to_owned());
+    emit_log(log, || "start process all messages".to_owned());
 
     let mut result = ProcessAllMessagesResult {
         group_results: Vec::new(),
@@ -293,7 +310,7 @@ pub fn process_all_messages(
 
     for messages_of_group in args.group_messages {
         let group_id = &messages_of_group.group_id;
-        emit(format!("process message of group {}", group_id));
+        emit_log(log, || format!("process message of group {}", group_id));
 
         let mut mls_group: Option<MlsGroup> = group(provider, group_id).ok();
 
@@ -476,10 +493,12 @@ pub fn process_all_messages(
         }
 
         // Process all messages
-        for msg in &messages_of_group.messages {
+        let mut error = None;
+        let mut commit_group_loaded = false;
+        'process_operation: for msg in &messages_of_group.messages {
             match msg.message_type {
                 MessageType::Welcome => {
-                    emit(format!("process welcome, group {}", group_id));
+                    emit_log(log, || format!("process welcome, group {}", group_id));
                     match provider
                         .transaction(|tx_provider| {
                             process_welcome(tx_provider, &msg.blob, join_config)
@@ -490,50 +509,106 @@ pub fn process_all_messages(
                             mls_group = Some(new_group);
                         }
                         Err(err) => {
-                            emit(format!(
-                                "process welcome error, group {}: {}",
-                                group_id, err
-                            ));
+                            emit_log(log, || {
+                                format!("process welcome error, group {}: {}", group_id, err)
+                            });
                         }
                     }
                 }
                 MessageType::Commit => {
-                    emit(format!(
-                        "start process commit, group {}, epoch {}",
-                        group_id, msg.epoch
-                    ));
+                    emit_log(log, || {
+                        format!(
+                            "start process commit, group {}, epoch {}",
+                            group_id, msg.epoch
+                        )
+                    });
                     if mls_group.is_some() {
-                        match provider
-                            .transaction(|tx_provider| {
-                                let mut tx_group = group(tx_provider, group_id)?;
-                                let tx_signer = group_signer(&tx_group, tx_provider)?;
-                                let _ = process_operation_message(
-                                    &mut tx_group,
-                                    tx_provider,
-                                    &tx_signer,
-                                    &msg.blob,
-                                )?;
-                                Ok(tx_group)
-                            })
-                            .map_err(|e| Error::Storage(e.to_string()))
-                        {
-                            Ok(updated_group) => {
-                                mls_group = Some(updated_group);
-                            }
-                            Err(err) => {
-                                emit(format!("process commit error, group {}: {}", group_id, err));
+                        if !commit_group_loaded {
+                            match group(provider, group_id) {
+                                Ok(fresh_group) => {
+                                    emit_log(log, || {
+                                        format!(
+                                            "process commit - load group data done, group {}, epoch {}",
+                                            group_id, msg.epoch
+                                        )
+                                    });
+                                    mls_group = Some(fresh_group);
+                                    commit_group_loaded = true;
+                                }
+                                Err(err) => {
+                                    let err_log = format!(
+                                        "process commit - load group data error, group {}: {}",
+                                        group_id, err
+                                    );
+                                    emit_log(log, || err_log.clone());
+                                    if err_log
+                                        .contains("Error writing updated group data to storage")
+                                        || err_log.contains("database is locked")
+                                        || err_log.contains("Error interacting with storage")
+                                    {
+                                        error = Some(GroupError {
+                                            error_code: convert_to_error_code(&err),
+                                            error_message: err_log.to_owned(),
+                                        });
+                                        members_to_remove_hashmap.clear();
+                                        break 'process_operation;
+                                    }
+                                }
                             }
                         }
 
-                        emit(format!(
-                            "end process commit, group {}, epoch {}",
-                            group_id, msg.epoch
-                        ));
+                        if let Some(mut current_group) = mls_group.take() {
+                            match provider
+                                .transaction(|tx_provider| {
+                                    let _ = process_operation_message(
+                                        &mut current_group,
+                                        tx_provider,
+                                        &msg.blob,
+                                    )?;
+                                    Ok(())
+                                })
+                                .map_err(|e| Error::ProcessMessage(e.to_string()))
+                            {
+                                Ok(()) => {
+                                    mls_group = Some(current_group);
+                                }
+                                Err(err) => {
+                                    mls_group = Some(current_group);
+                                    let err_log = format!(
+                                        "process commit error, group {}: {}",
+                                        group_id, err
+                                    );
+                                    emit_log(log, || err_log.clone());
+                                    if err_log
+                                        .contains("Error writing updated group data to storage")
+                                        || err_log.contains("database is locked")
+                                        || err_log.contains("Error interacting with storage")
+                                    {
+                                        error = Some(GroupError {
+                                            error_code: convert_to_error_code(&err),
+                                            error_message: err_log.to_owned(),
+                                        });
+                                        members_to_remove_hashmap.clear();
+                                        break 'process_operation;
+                                    }
+                                }
+                            }
+                        } else {
+                            emit_log(log, || {
+                                format!("process commit error, group {}: group not found", group_id)
+                            });
+                        }
+
+                        emit_log(log, || {
+                            format!(
+                                "end process commit, group {}, epoch {}",
+                                group_id, msg.epoch
+                            )
+                        });
                     } else {
-                        emit(format!(
-                            "process commit error, group {}: group not found",
-                            group_id
-                        ));
+                        emit_log(log, || {
+                            format!("process commit error, group {}: group not found", group_id)
+                        });
                     }
 
                     if !members_to_remove_hashmap.is_empty() {
@@ -580,12 +655,25 @@ pub fn process_all_messages(
                 .into_iter()
                 .map(|member_id| member_id.to_owned())
                 .collect(),
+            error,
         });
     }
 
-    emit("end process all messages".to_owned());
+    emit_log(log, || "end process all messages".to_owned());
 
     Ok(result)
+}
+
+// TODO: refactor this later match by error enum
+fn convert_to_error_code(err: &Error) -> GroupErrorCode {
+    let err_str = err.to_string();
+    if err_str.contains("An error occurred during AEAD decryption.") {
+        GroupErrorCode::Aead
+    } else if err_str.contains("Storage error") {
+        GroupErrorCode::Storage
+    } else {
+        GroupErrorCode::ProcessCommit
+    }
 }
 
 pub struct CreateCustomProposalArgs {
@@ -670,4 +758,36 @@ fn collect_group_member_ids(group: &MlsGroup) -> HashSet<String> {
     }
 
     set
+}
+
+pub fn get_all_group_ids(provider: &SqliteProvider) -> Vec<String> {
+    let mut group_ids = Vec::new();
+
+    let connection = match provider.storage().connection_pool().checkout() {
+        Ok(conn) => conn,
+        Err(_) => return group_ids,
+    };
+
+    let mut stmt = match connection
+        .prepare("SELECT DISTINCT group_id FROM openmls_group_data WHERE provider_version = ?")
+    {
+        Ok(stmt) => stmt,
+        Err(_) => return group_ids,
+    };
+
+    let blobs: Vec<Vec<u8>> = match stmt
+        .query_map([kchat_storage_provider::STORAGE_PROVIDER_VERSION], |row| {
+            row.get::<_, Vec<u8>>(0)
+        }) {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(_) => return group_ids,
+    };
+
+    for blob in blobs {
+        if let Ok(group_id) = serde_json::from_slice::<openmls::group::GroupId>(&blob) {
+            group_ids.push(String::from_utf8_lossy(group_id.as_slice()).to_string());
+        }
+    }
+
+    group_ids
 }

@@ -379,6 +379,33 @@ pub struct GroupResult {
     pub group_id: String,
     pub members_to_remove: Vec<MemberInfo>,
     pub members_to_readd: Vec<MemberInfo>,
+    pub error: Option<GroupError>,
+}
+
+#[derive(uniffi::Enum)]
+pub enum GroupErrorCode {
+    Storage,
+    Aead,
+    ProcessCommit,
+}
+
+#[derive(uniffi::Record)]
+pub struct GroupError {
+    pub error_code: GroupErrorCode,
+    pub error_message: String,
+}
+
+impl From<kchat_mls::GroupError> for GroupError {
+    fn from(value: kchat_mls::GroupError) -> Self {
+        Self {
+            error_code: match value.error_code {
+                kchat_mls::GroupErrorCode::Storage => GroupErrorCode::Storage,
+                kchat_mls::GroupErrorCode::Aead => GroupErrorCode::Aead,
+                kchat_mls::GroupErrorCode::ProcessCommit => GroupErrorCode::ProcessCommit,
+            },
+            error_message: value.error_message,
+        }
+    }
 }
 
 #[derive(uniffi::Record, Debug, Eq, PartialEq, Hash, Clone)]
@@ -640,8 +667,7 @@ impl UqMls {
             .provider
             .transaction(|tx_provider| {
                 let mut mls_group = core::group(tx_provider, group_id)?;
-                let signer = core::group_signer(&mls_group, tx_provider)?;
-                core::process_operation_message(&mut mls_group, tx_provider, &signer, message)
+                core::process_operation_message(&mut mls_group, tx_provider, message)
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
 
@@ -668,14 +694,7 @@ impl UqMls {
             .provider
             .transaction(|tx_provider| {
                 let mut mls_group = core::group(tx_provider, group_id)?;
-                let signer = core::group_signer(&mls_group, tx_provider)?;
-                core::process_many_operation_messages(
-                    &mut mls_group,
-                    tx_provider,
-                    &signer,
-                    messages,
-                    None,
-                )
+                core::process_many_operation_messages(&mut mls_group, tx_provider, messages, None)
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
 
@@ -708,15 +727,56 @@ impl UqMls {
         })
     }
 
-    pub fn encrypt_message(&self, group_id: &str, message: &[u8]) -> Result<Vec<u8>, Error> {
-        let mut mls_group = core::group(&self.provider, group_id)?;
-        let signer = core::group_signer(&mls_group, &self.provider)?;
-        Ok(core::encrypt_message(
-            &mut mls_group,
-            &self.provider,
-            &signer,
-            message,
-        )?)
+    pub fn encrypt_message(
+        &self,
+        group_id: &str,
+        message: &[u8],
+        callback: Option<Arc<dyn ProcessMessagesCallback>>,
+    ) -> Result<Vec<u8>, Error> {
+        let emit = |msg: String| {
+            if let Some(cb) = &callback {
+                cb.on_trigger(msg);
+            }
+        };
+
+        emit(format!("start encrypt message, group {}", group_id));
+
+        let mut mls_group = core::group(&self.provider, group_id).map_err(|err| {
+            emit(format!(
+                "encrypt message - load group error, group {}: {}",
+                group_id, err
+            ));
+            err
+        })?;
+        emit(format!(
+            "encrypt message - load group done, group {}",
+            group_id
+        ));
+
+        let signer = core::group_signer(&mls_group, &self.provider).map_err(|err| {
+            emit(format!(
+                "encrypt message - get signer error, group {}: {}",
+                group_id, err
+            ));
+            err
+        })?;
+        emit(format!(
+            "encrypt message - get signer done, group {}",
+            group_id
+        ));
+
+        let encrypted = core::encrypt_message(&mut mls_group, &self.provider, &signer, message)
+            .map_err(|err| {
+                emit(format!(
+                    "encrypt message error, group {}: {}",
+                    group_id, err
+                ));
+                err
+            })?;
+
+        emit(format!("end encrypt message, group {}", group_id));
+
+        Ok(encrypted)
     }
 
     pub fn export_group_info(&self, group_id: &str) -> Result<Vec<u8>, Error> {
@@ -1130,6 +1190,7 @@ impl UqMls {
                             mls_fingerprint: member.mls_fingerprint.to_owned(),
                         })
                         .collect(),
+                    error: group_result.error.clone().map(|e| e.into()),
                 })
                 .collect(),
             deleted_groups: result.deleted_groups,

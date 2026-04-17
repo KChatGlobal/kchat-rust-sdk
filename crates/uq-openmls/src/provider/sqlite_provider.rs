@@ -44,6 +44,15 @@ pub struct SqliteProvider {
     mls_storage: SqliteStorageProvider<JsonCodec>,
 }
 
+impl Clone for SqliteProvider {
+    fn clone(&self) -> Self {
+        Self {
+            crypto: self.crypto.clone(),
+            mls_storage: self.mls_storage.clone(),
+        }
+    }
+}
+
 pub struct TransactionalSqliteProvider<'tx> {
     crypto: &'tx RustCrypto,
     mls_storage: TransactionalStorageProvider<'tx, JsonCodec>,

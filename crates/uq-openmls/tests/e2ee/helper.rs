@@ -52,8 +52,7 @@ pub fn process_operation_message<Provider: OpenMlsProvider>(
     message: &[u8],
 ) -> Result<ProcessOperationMessageResult, Error> {
     with_group(provider, group_id, |group| {
-        let signer = core_group_signer(group, provider)?;
-        core_process_operation_message(group, provider, &signer, message)
+        core_process_operation_message(group, provider, message)
     })
 }
 

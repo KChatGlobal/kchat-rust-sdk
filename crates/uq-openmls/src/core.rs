@@ -249,7 +249,6 @@ pub struct ProcessOperationMessageResult {
 pub fn process_operation_message<Provider: OpenMlsProvider>(
     group: &mut MlsGroup,
     provider: &Provider,
-    signer: &SignatureKeyPair,
     message: &[u8],
 ) -> Result<ProcessOperationMessageResult, Error> {
     let message = MlsMessageIn::tls_deserialize_exact(message)?;
@@ -265,10 +264,11 @@ pub fn process_operation_message<Provider: OpenMlsProvider>(
         }
         ProcessedMessageContent::ProposalMessage(staged_proposal)
         | ProcessedMessageContent::ExternalJoinProposalMessage(staged_proposal) => {
+            let signer = group_signer(group, provider)?;
             group
                 .store_pending_proposal(provider.storage(), *staged_proposal)
                 .map_err(|e| Error::Storage(e.to_string()))?;
-            let (commit, _, group_info) = group.commit_to_pending_proposals(provider, signer)?;
+            let (commit, _, group_info) = group.commit_to_pending_proposals(provider, &signer)?;
 
             Ok(ProcessOperationMessageResult {
                 commit: Some(commit.tls_serialize_detached()?),
@@ -292,7 +292,6 @@ pub struct ProcessManyOperationMessagesResult {
 pub fn process_many_operation_messages<Provider: OpenMlsProvider>(
     group: &mut MlsGroup,
     provider: &Provider,
-    signer: &SignatureKeyPair,
     messages: &[Vec<u8>],
     log: Option<&dyn Fn(String)>,
 ) -> Result<ProcessManyOperationMessagesResult, Error> {
@@ -305,6 +304,7 @@ pub fn process_many_operation_messages<Provider: OpenMlsProvider>(
     emit(format!("processing {} operation messages", messages.len()));
 
     let mut current_epoch = group.epoch();
+    let mut signer: Option<SignatureKeyPair> = None;
     for (i, message) in messages.iter().enumerate() {
         emit(format!(
             "processing message {}/{}, epoch {}",
@@ -324,10 +324,16 @@ pub fn process_many_operation_messages<Provider: OpenMlsProvider>(
             ProcessedMessageContent::ProposalMessage(staged_proposal)
             | ProcessedMessageContent::ExternalJoinProposalMessage(staged_proposal) => {
                 emit("storing and committing pending proposal".to_owned());
+                if signer.is_none() {
+                    signer = Some(group_signer(group, provider)?);
+                }
                 group
                     .store_pending_proposal(provider.storage(), *staged_proposal)
                     .map_err(|e| Error::Storage(e.to_string()))?;
-                group.commit_to_pending_proposals(provider, signer)?;
+                group.commit_to_pending_proposals(
+                    provider,
+                    signer.as_ref().ok_or(Error::MissingSignatureKeyPair)?,
+                )?;
             }
             _ => (),
         }

@@ -18,5 +18,5 @@ thiserror = { workspace = true }
 secrecy = { workspace = true }
 
 [dev-dependencies]
-openmls = { workspace = true, features = ["fork-resolution", "test-utils"] }
+openmls = { workspace = true, features = ["fork-resolution", "libcrux-provider", "test-utils"] }
 criterion = { workspace = true }

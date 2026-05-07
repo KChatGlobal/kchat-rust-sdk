@@ -27,7 +27,9 @@ ios/
 ios.zip
 android/
 android.zip
+debug/
 
 aidlc-docs/
 report
 vendor-openmls/
+DEBUG.md

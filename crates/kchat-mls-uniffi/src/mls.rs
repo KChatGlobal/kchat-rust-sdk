@@ -3,8 +3,8 @@ use std::sync::Arc;
 use kchat_mls::{
     CreateCustomProposalArgs, GroupPendingOperation, GroupStatusConnection,
     OP_JOIN_BY_EXTERNAL_COMMIT, OP_NONE, create_custom_proposal, delete_group_status,
-    get_group_pending_operation, get_group_pending_operations_batch, insert_or_update_group_status,
-    open_group_status_connection, process_all_messages,
+    extract_jid_from_member_id, get_group_pending_operation, get_group_pending_operations_batch,
+    insert_or_update_group_status, open_group_status_connection, process_all_messages,
 };
 use openmls::{
     group::{
@@ -157,17 +157,25 @@ impl From<core::ProcessManyOperationMessagesResult> for ProcessManyOperationMess
 
 #[derive(uniffi::Record)]
 pub struct QueuedProposal {
-    pub proposal: Proposal,
     pub sender: String,
-    pub current_epoch: u64,
+    pub client_jid: Option<String>,
+    pub mls_client_id: Option<String>,
+    pub mls_fingerprint: Option<String>,
+    pub epoch: Option<u64>,
+    pub group_id: String,
+    pub proposal: Proposal,
 }
 
 impl From<core::QueuedProposal> for QueuedProposal {
     fn from(value: core::QueuedProposal) -> Self {
         Self {
+            group_id: value.group_id,
             proposal: value.proposal.into(),
-            sender: value.sender,
-            current_epoch: value.current_epoch,
+            sender: value.sender.clone(),
+            client_jid: extract_jid_from_member_id(&value.sender),
+            mls_client_id: Some(value.sender),
+            mls_fingerprint: None,
+            epoch: Some(value.epoch),
         }
     }
 }
@@ -272,6 +280,7 @@ pub enum Proposal {
     Add,
     Update,
     Remove,
+    ReAdd,
     PreSharedKey,
     ReInit,
     ExternalInit,
@@ -294,6 +303,15 @@ impl From<core::Proposal> for Proposal {
             core::Proposal::AppAck => Self::AppAck,
             core::Proposal::SelfRemove => Self::SelfRemove,
             core::Proposal::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<kchat_mls::CustomProposalType> for Proposal {
+    fn from(value: kchat_mls::CustomProposalType) -> Self {
+        match value {
+            kchat_mls::CustomProposalType::ReAdd => Proposal::ReAdd,
+            kchat_mls::CustomProposalType::Remove => Proposal::Remove,
         }
     }
 }
@@ -410,22 +428,15 @@ impl From<kchat_mls::GroupError> for GroupError {
 
 #[derive(uniffi::Record, Debug, Eq, PartialEq, Hash, Clone)]
 pub struct MemberInfo {
-    pub mls_client_id: String,
-    pub mls_fingerprint: String,
+    pub client_jid: Option<String>,
+    pub mls_client_id: Option<String>,
+    pub mls_fingerprint: Option<String>,
 }
 
 #[derive(uniffi::Record)]
 pub struct ProcessAllMessagesResult {
     pub group_results: Vec<GroupResult>,
     pub deleted_groups: Vec<String>,
-}
-
-#[derive(uniffi::Record)]
-pub struct CustomProposal {
-    pub mls_client_id: String,
-    pub mls_fingerprint: String,
-    pub group_id: String,
-    pub proposal_type: String,
 }
 
 #[uniffi::export]
@@ -716,14 +727,17 @@ impl UqMls {
     pub fn process_custom_proposal_message(
         &self,
         custom_proposal: &[u8],
-    ) -> Option<CustomProposal> {
+    ) -> Option<QueuedProposal> {
         let result = kchat_mls::process_custom_proposal(custom_proposal);
 
-        result.map(|result| CustomProposal {
+        result.map(|result| QueuedProposal {
+            sender: result.mls_client_id.clone().unwrap_or_default(),
+            client_jid: result.client_jid,
             mls_client_id: result.mls_client_id,
             mls_fingerprint: result.mls_fingerprint,
+            epoch: result.epoch,
             group_id: result.group_id,
-            proposal_type: result.proposal_type.to_string(),
+            proposal: result.proposal_type.into(),
         })
     }
 
@@ -1178,6 +1192,7 @@ impl UqMls {
                         .members_to_remove
                         .iter()
                         .map(|member| MemberInfo {
+                            client_jid: member.client_jid.to_owned(),
                             mls_client_id: member.mls_client_id.to_owned(),
                             mls_fingerprint: member.mls_fingerprint.to_owned(),
                         })
@@ -1186,6 +1201,7 @@ impl UqMls {
                         .members_to_readd
                         .iter()
                         .map(|member| MemberInfo {
+                            client_jid: member.client_jid.to_owned(),
                             mls_client_id: member.mls_client_id.to_owned(),
                             mls_fingerprint: member.mls_fingerprint.to_owned(),
                         })

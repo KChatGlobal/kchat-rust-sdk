@@ -5,9 +5,9 @@ pub mod error;
 use kchat_mls::{
     CreateCustomProposalArgs, GroupPendingOperation, GroupStatusConnection,
     OP_JOIN_BY_EXTERNAL_COMMIT, OP_NONE, create_custom_proposal, delete_group_status,
-    get_all_group_ids, get_group_pending_operation, get_group_pending_operations_batch,
-    insert_or_update_group_status, open_group_status_connection, process_all_messages,
-    process_custom_proposal,
+    extract_jid_from_member_id, get_all_group_ids, get_group_pending_operation,
+    get_group_pending_operations_batch, insert_or_update_group_status,
+    open_group_status_connection, process_all_messages, process_custom_proposal,
 };
 use napi::{
     Task,
@@ -166,17 +166,25 @@ impl From<core::ProcessApplicationMessageResult> for ProcessApplicationMessageRe
 
 #[napi(object)]
 pub struct QueuedProposal {
-    pub proposal: Proposal,
     pub sender: String,
-    pub current_epoch: i64,
+    pub client_jid: Option<String>,
+    pub mls_client_id: Option<String>,
+    pub mls_fingerprint: Option<String>,
+    pub epoch: Option<i64>,
+    pub group_id: String,
+    pub proposal: Proposal,
 }
 
 impl From<core::QueuedProposal> for QueuedProposal {
     fn from(value: core::QueuedProposal) -> Self {
         Self {
+            group_id: value.group_id,
             proposal: value.proposal.into(),
-            sender: value.sender,
-            current_epoch: value.current_epoch as i64,
+            sender: value.sender.clone(),
+            client_jid: extract_jid_from_member_id(&value.sender),
+            mls_client_id: Some(value.sender),
+            mls_fingerprint: None,
+            epoch: Some(value.epoch as i64),
         }
     }
 }
@@ -278,6 +286,7 @@ pub enum Proposal {
     Add,
     Update,
     Remove,
+    ReAdd,
     PreSharedKey,
     ReInit,
     ExternalInit,
@@ -300,6 +309,15 @@ impl From<core::Proposal> for Proposal {
             core::Proposal::AppAck => Self::AppAck,
             core::Proposal::SelfRemove => Self::SelfRemove,
             core::Proposal::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<kchat_mls::CustomProposalType> for Proposal {
+    fn from(value: kchat_mls::CustomProposalType) -> Self {
+        match value {
+            kchat_mls::CustomProposalType::ReAdd => Proposal::ReAdd,
+            kchat_mls::CustomProposalType::Remove => Proposal::Remove,
         }
     }
 }
@@ -416,8 +434,9 @@ impl From<kchat_mls::GroupError> for GroupError {
 
 #[napi(object)]
 pub struct MemberInfo {
-    pub mls_client_id: String,
-    pub mls_fingerprint: String,
+    pub client_jid: Option<String>,
+    pub mls_client_id: Option<String>,
+    pub mls_fingerprint: Option<String>,
 }
 
 #[napi(object)]
@@ -467,6 +486,7 @@ fn convert_process_all_messages_result(
                     .members_to_remove
                     .into_iter()
                     .map(|member| MemberInfo {
+                        client_jid: member.client_jid,
                         mls_client_id: member.mls_client_id,
                         mls_fingerprint: member.mls_fingerprint,
                     })
@@ -475,6 +495,7 @@ fn convert_process_all_messages_result(
                     .members_to_readd
                     .into_iter()
                     .map(|member| MemberInfo {
+                        client_jid: member.client_jid,
                         mls_client_id: member.mls_client_id,
                         mls_fingerprint: member.mls_fingerprint,
                     })
@@ -1783,14 +1804,17 @@ pub struct ProcessCustomProposalMessageTask {
 
 impl_identity_task!(
     ProcessCustomProposalMessageTask,
-    Option<CustomProposal>,
+    Option<QueuedProposal>,
     |this| {
         Ok(
-            process_custom_proposal(&this.custom_proposal).map(|result| CustomProposal {
+            process_custom_proposal(&this.custom_proposal).map(|result| QueuedProposal {
+                sender: result.mls_client_id.clone().unwrap_or_default(),
+                client_jid: result.client_jid,
                 mls_client_id: result.mls_client_id,
                 mls_fingerprint: result.mls_fingerprint,
+                epoch: result.epoch.map(|e| e as i64),
                 group_id: result.group_id,
-                proposal_type: result.proposal_type.to_string(),
+                proposal: result.proposal_type.into(),
             }),
         )
     }
@@ -1803,14 +1827,6 @@ pub struct AllGroupIdsTask {
 impl_identity_task!(AllGroupIdsTask, Vec<String>, |this| {
     Ok(get_all_group_ids(&this.provider))
 });
-
-#[napi(object)]
-pub struct CustomProposal {
-    pub mls_client_id: String,
-    pub mls_fingerprint: String,
-    pub group_id: String,
-    pub proposal_type: String,
-}
 
 #[napi(object)]
 pub struct ReAddResult {

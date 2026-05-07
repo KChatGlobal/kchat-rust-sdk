@@ -352,9 +352,10 @@ pub fn process_many_operation_messages<Provider: OpenMlsProvider>(
 }
 
 pub struct QueuedProposal {
+    pub group_id: String,
     pub proposal: Proposal,
     pub sender: String,
-    pub current_epoch: u64,
+    pub epoch: u64,
 }
 
 /// Decrypt proposal message and return `QueuedProposal` data.
@@ -366,6 +367,8 @@ pub fn process_proposal_message<Provider: OpenMlsProvider>(
     let message = MlsMessageIn::tls_deserialize_exact(message)?;
     let protocol_message = message.try_into_protocol_message()?;
     let processed_message = group.process_message(provider, protocol_message)?;
+    let epoch = processed_message.epoch().as_u64();
+    let group_id = String::from_utf8_lossy(processed_message.group_id().as_slice()).to_string();
 
     if let ProcessedMessageContent::ProposalMessage(staged_proposal) =
         processed_message.into_content()
@@ -377,9 +380,10 @@ pub fn process_proposal_message<Provider: OpenMlsProvider>(
                 .and_then(|credential| BasicCredential::try_from(credential.to_owned()).ok())
                 .and_then(|credential| String::from_utf8(credential.identity().to_vec()).ok())
                 .map(|identity| QueuedProposal {
+                    group_id,
                     proposal,
                     sender: identity,
-                    current_epoch: group.epoch().as_u64(),
+                    epoch,
                 })
             {
                 return Ok(queued_proposal);

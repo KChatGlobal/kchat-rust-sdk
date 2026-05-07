@@ -130,38 +130,27 @@ impl Into<String> for GroupPendingOperation {
     }
 }
 
-#[derive(
-    Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, serde::Serialize, serde::Deserialize,
-)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct CustomProposal {
-    pub mls_client_id: String,
-    pub mls_fingerprint: String,
+    pub client_jid: Option<String>,
+    pub mls_client_id: Option<String>,
+    pub mls_fingerprint: Option<String>,
+    pub epoch: Option<u64>,
     pub group_id: String,
     pub proposal_type: CustomProposalType,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    rkyv::Archive,
-    rkyv::Serialize,
-    rkyv::Deserialize,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CustomProposalType {
     ReAdd,
+    Remove,
 }
 
 impl ToString for CustomProposalType {
     fn to_string(&self) -> String {
         match self {
             CustomProposalType::ReAdd => "ReAdd".to_owned(),
+            CustomProposalType::Remove => "Remove".to_owned(),
         }
     }
 }
@@ -285,8 +274,9 @@ pub struct GroupError {
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct MemberInfo {
-    pub mls_client_id: String,
-    pub mls_fingerprint: String,
+    pub client_jid: Option<String>,
+    pub mls_client_id: Option<String>,
+    pub mls_fingerprint: Option<String>,
 }
 
 pub struct ProcessAllMessagesResult {
@@ -458,11 +448,9 @@ pub fn process_all_messages(
         }
 
         let mut members_to_remove_hashmap = HashMap::new();
-        let mut members_to_readd = HashSet::new();
+        let mut members_to_readd: HashSet<MemberInfo> = HashSet::new();
 
-        let group_member_set = mls_group
-            .as_ref()
-            .map(|group| collect_group_member_ids(group));
+        let mut group_member_sets: Option<(HashSet<String>, HashSet<String>)> = None;
 
         let mut lastest_epoch = 0;
         for msg in &messages_of_group.messages {
@@ -473,20 +461,62 @@ pub fn process_all_messages(
             if msg.message_type == MessageType::Proposal {
                 if let Some(group) = &mut mls_group {
                     if let Ok(proposal) = process_proposal_message(group, provider, &msg.blob) {
-                        if group_member_set
-                            .as_ref()
-                            .map(|set| set.contains(&proposal.sender))
-                            .unwrap_or(false)
-                            && proposal.proposal == Proposal::Remove
-                        {
-                            members_to_remove_hashmap.insert(
-                                MemberInfo {
-                                    mls_client_id: proposal.sender,
-                                    mls_fingerprint: msg.sender.to_owned(),
-                                },
-                                msg.epoch,
-                            );
+                        emit_log(log, || {
+                            format!("start process proposal, group {}", group_id)
+                        });
+
+                        if proposal.proposal == Proposal::Remove {
+                            let (group_member_id_set, _) = group_member_sets
+                                .get_or_insert_with(|| collect_group_member_ids_and_jids(group));
+                            if group_member_id_set.contains(&proposal.sender) {
+                                members_to_remove_hashmap.insert(
+                                    MemberInfo {
+                                        client_jid: extract_jid_from_member_id(&proposal.sender),
+                                        mls_client_id: Some(proposal.sender),
+                                        mls_fingerprint: Some(msg.sender.to_owned()),
+                                    },
+                                    msg.epoch,
+                                );
+                            }
                         }
+
+                        emit_log(log, || format!("end process proposal, group {}", group_id));
+                    } else if let Some(custom_proposal) = process_custom_proposal(&msg.blob) {
+                        emit_log(log, || {
+                            format!(
+                                "start process custom proposal, group {}, proposal {:?}",
+                                group_id, custom_proposal
+                            )
+                        });
+
+                        if let Some(client_jid) = custom_proposal.client_jid {
+                            if custom_proposal.proposal_type == CustomProposalType::Remove {
+                                let (_, group_member_jid_set) = group_member_sets
+                                    .get_or_insert_with(|| {
+                                        collect_group_member_ids_and_jids(group)
+                                    });
+                                if group_member_jid_set.contains(&client_jid) {
+                                    emit_log(log, || {
+                                        format!(
+                                            "process custom proposal, group {}, client jid {}",
+                                            group_id, client_jid
+                                        )
+                                    });
+                                    members_to_remove_hashmap.insert(
+                                        MemberInfo {
+                                            client_jid: Some(client_jid),
+                                            mls_client_id: None,
+                                            mls_fingerprint: None,
+                                        },
+                                        msg.epoch,
+                                    );
+                                }
+                            }
+                        }
+
+                        emit_log(log, || {
+                            format!("end process custom proposal, group {}", group_id)
+                        });
                     }
                 }
             }
@@ -614,12 +644,21 @@ pub fn process_all_messages(
                     if !members_to_remove_hashmap.is_empty() {
                         let mut already_remove_members = Vec::new();
                         if let Some(group) = &mls_group {
-                            let group_member_set = collect_group_member_ids(group);
+                            let (group_member_id_set, group_member_jid_set) =
+                                collect_group_member_ids_and_jids(group);
                             for (member_info, epoch) in members_to_remove_hashmap.iter() {
-                                if msg.epoch >= *epoch
-                                    && !group_member_set.contains(&member_info.mls_client_id)
-                                {
-                                    already_remove_members.push(member_info.to_owned());
+                                if let Some(mls_client_id) = &member_info.mls_client_id {
+                                    if msg.epoch >= *epoch
+                                        && !group_member_id_set.contains(mls_client_id)
+                                    {
+                                        already_remove_members.push(member_info.to_owned());
+                                    }
+                                } else if let Some(client_jid) = &member_info.client_jid {
+                                    if msg.epoch >= *epoch
+                                        && !group_member_jid_set.contains(client_jid)
+                                    {
+                                        already_remove_members.push(member_info.to_owned());
+                                    }
                                 }
                             }
                         }
@@ -635,8 +674,15 @@ pub fn process_all_messages(
                             && msg.epoch > lastest_epoch
                         {
                             members_to_readd.insert(MemberInfo {
+                                client_jid: if let Some(client_jid) = &custom_proposal.client_jid {
+                                    Some(client_jid.to_owned())
+                                } else if let Some(mls_client_id) = &custom_proposal.mls_client_id {
+                                    extract_jid_from_member_id(mls_client_id)
+                                } else {
+                                    None
+                                },
                                 mls_client_id: custom_proposal.mls_client_id,
-                                mls_fingerprint: msg.sender.to_owned(),
+                                mls_fingerprint: Some(msg.sender.to_owned()),
                             });
                         }
                     }
@@ -687,25 +733,19 @@ pub fn create_custom_proposal(
     request: CreateCustomProposalArgs,
 ) -> Vec<u8> {
     let proposal = CustomProposal {
-        mls_client_id: mls_client_id.to_owned(),
-        mls_fingerprint: request.mls_fingerprint,
+        mls_client_id: Some(mls_client_id.to_owned()),
+        client_jid: extract_jid_from_member_id(mls_client_id),
+        mls_fingerprint: Some(request.mls_fingerprint),
+        epoch: None,
         group_id: group_id.to_owned(),
         proposal_type: request.custom_proposal_type,
     };
-
-    // rkyv::to_bytes::<rkyv::rancor::Error>(&proposal)
-    //     .map(|bytes| bytes.into_vec())
-    //     .unwrap_or_default()
 
     serde_json::to_vec(&proposal).unwrap_or_default()
 }
 
 pub fn process_custom_proposal(custom_proposal: &[u8]) -> Option<CustomProposal> {
-    if let Ok(raw) = rkyv::from_bytes::<CustomProposal, rkyv::rancor::Error>(custom_proposal) {
-        Some(raw)
-    } else {
-        serde_json::from_slice::<CustomProposal>(custom_proposal).ok()
-    }
+    serde_json::from_slice::<CustomProposal>(custom_proposal).ok()
 }
 
 fn get_first_message(
@@ -748,18 +788,31 @@ fn id_from_credential(cred: &Credential) -> Option<String> {
     None
 }
 
-fn collect_group_member_ids(group: &MlsGroup) -> HashSet<String> {
-    let mut set = HashSet::new();
+fn collect_group_member_ids_and_jids(group: &MlsGroup) -> (HashSet<String>, HashSet<String>) {
+    let mut id_set = HashSet::new();
+    let mut jid_set = HashSet::new();
 
     for member in group.members() {
         if let Some(id) = id_from_credential(&member.credential) {
-            set.insert(id);
+            if let Some(jid) = extract_jid_from_member_id(&id) {
+                jid_set.insert(jid);
+            }
+
+            id_set.insert(id);
         }
     }
 
-    set
+    (id_set, jid_set)
 }
 
+pub fn extract_jid_from_member_id(id: &str) -> Option<String> {
+    if let Some(slash_pos) = id.find('/') {
+        let jid = &id[..slash_pos];
+        return Some(jid.to_owned());
+    }
+
+    None
+}
 pub fn get_all_group_ids(provider: &SqliteProvider) -> Vec<String> {
     let mut group_ids = Vec::new();
 

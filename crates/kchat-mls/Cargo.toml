@@ -13,7 +13,6 @@ uq-openmls = { path = "../uq-openmls" }
 kchat_storage_provider = { path = "../kchat-storage-provider" }
 
 rusqlite = { version = "0.32", features = ["bundled"] }
-rkyv = "0.8"
 thiserror = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }

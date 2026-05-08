@@ -31,7 +31,7 @@ jobs:
           ndk-version: r26d
 
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+        run: cargo install cargo-ndk@0.9.0
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4

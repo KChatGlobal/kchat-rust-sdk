@@ -1,22 +1,114 @@
-# The KChat Rust SDK
+# KChat Rust SDK
 
-This repo contains SDK written in Rust that supports specific logics for KChat.
+A Cargo workspace containing the Rust SDK that powers the [Messaging Layer Security (MLS)](https://datatracker.ietf.org/wg/mls/about/) end-to-end encryption layer for KChat. The SDK wraps [OpenMLS](https://github.com/openmls/openmls) with KChat-specific business logic and exposes the same core to Swift, Kotlin and Node.js through cross-language bindings.
 
-## Debug MLS Sqlite
+## Workspace Layout
+
+The workspace is composed of five crates under `crates/`:
+
+- **`kchat-storage-provider`** — SQLite-backed implementation of the OpenMLS `StorageProvider` trait. Uses `rusqlite` with `r2d2` connection pooling and `refinery` migrations (see `crates/kchat-storage-provider/migrations`).
+- **`uq-openmls`** — Thin wrapper around OpenMLS exposing the core MLS primitives (group creation, welcome processing, proposal/commit handling, fork resolution) used by KChat. Also wires the SQLite storage provider into an `OpenMlsProvider`.
+- **`kchat-mls`** — High-level KChat MLS logic on top of `uq-openmls`: group lifecycle management, batch message processing, group-status persistence, and tree-hash bookkeeping.
+- **`kchat-mls-uniffi`** — [UniFFI](https://mozilla.github.io/uniffi-rs/) bindings that produce a Swift package and Kotlin/Android JNI libraries from `kchat-mls`. Crate type: `staticlib`, `cdylib`, `lib`.
+- **`kchat-mls-napi`** — [NAPI-RS](https://napi.rs/) bindings that expose `kchat-mls` to Node.js as a native addon (`@kchat/mls-napi`).
+
+Dependency graph:
+
 ```
-DB_PATH="/path/to/client.sqlite3"; \
-GROUP_ID="083623ce-6372-47ec-ad4d-758589e5d49a@conference.prod-next.kchat.com"; \
-OUT="openmls_selected_group_data.json"; \
-CODES=$(printf '%s' "$GROUP_ID" | od -An -tu1 | tr -s ' ' '\n' | sed '/^$/d' | paste -sd, -); \
-sqlite3 "$DB_PATH" -batch -noheader "
-WITH selected AS (
-  SELECT data_type, CAST(group_data AS TEXT) AS group_data_json
-  FROM openmls_group_data
-  WHERE CAST(group_id AS TEXT) LIKE '%$CODES%'
-    AND data_type IN ('context','group_epoch_secrets','confirmation_tag')
-)
-SELECT COALESCE(json_group_object(data_type, json(group_data_json)), '{}')
-FROM selected;
-" > "$OUT"; \
-echo "Wrote $OUT"
+kchat-mls-uniffi ─┐
+                  ├─► kchat-mls ─► uq-openmls ─► kchat-storage-provider ─► OpenMLS
+kchat-mls-napi  ─┘
 ```
+
+## Prerequisites
+
+- **Rust** (latest stable) via [rustup](https://rustup.rs/), with `edition = "2024"` support.
+- **SQLite** toolchain — bundled via `rusqlite`'s `bundled` / `bundled-sqlcipher-vendored-openssl` features, no system install required.
+- For mobile bindings (`kchat-mls-uniffi`):
+  - [`cargo-swift`](https://github.com/antoniusnaumann/cargo-swift) for iOS packaging.
+  - [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk) and the Android NDK for Android.
+- For Node.js bindings (`kchat-mls-napi`):
+  - Node.js 10+ with N-API support.
+  - `yarn` 1.x or 4.x (the crate ships with `yarn@4.9.1` via Corepack).
+  - `@napi-rs/cli`.
+
+## Build
+
+Build the entire workspace:
+
+```bash
+cargo build --workspace
+```
+
+Build a single crate:
+
+```bash
+cargo build -p kchat-mls
+cargo build -p uq-openmls
+cargo build -p kchat-storage-provider
+```
+
+Run the test suite:
+
+```bash
+cargo test --workspace
+```
+
+## Mobile Bindings (`kchat-mls-uniffi`)
+
+The `kchat-mls-uniffi` crate produces a `mls_mobile_sdk_rs` library plus a `uniffi-bindgen` binary used to generate foreign-language bindings.
+
+### iOS
+
+From `crates/kchat-mls-uniffi/`:
+
+```bash
+make build-ios
+```
+
+Internally this runs `scripts/mls_uniffi_build_ios.sh`, which calls `cargo swift package -y -p ios --release -n ios` and writes the Swift package / XCFramework to `./ios`. The deployment target defaults to iOS 16.0 and can be overridden with `IOS_DEPLOYMENT_TARGET`.
+
+### Android
+
+From `crates/kchat-mls-uniffi/`:
+
+```bash
+make build-android
+```
+
+This runs `scripts/mls_uniffi_build_android.sh`, which:
+
+1. Builds `kchat-mls-uniffi` in release mode for the host.
+2. Generates Kotlin bindings via `uniffi-bindgen` into `./android`.
+3. Cross-compiles JNI libraries for `arm64-v8a` and `x86_64` with `cargo-ndk` into `./android/com/kchat/mls/jniLibs`.
+
+## Node.js Bindings (`kchat-mls-napi`)
+
+From `crates/kchat-mls-napi/`:
+
+```bash
+yarn install
+yarn build         # release build
+yarn build:debug   # debug build
+```
+
+The package is published as `@kchat/mls-napi`. Supported targets are declared in `crates/kchat-mls-napi/package.json`:
+
+- `x86_64-pc-windows-msvc`
+- `x86_64-apple-darwin`
+- `aarch64-apple-darwin`
+- `x86_64-unknown-linux-gnu`
+
+## OpenMLS Patch
+
+The workspace pins OpenMLS to the KChat fork via `[patch.crates-io]` in the root `Cargo.toml`:
+
+```toml
+[patch.crates-io]
+openmls               = { git = "https://github.com/KChatGlobal/openmls.git", branch = "main" }
+openmls_basic_credential = { git = "https://github.com/KChatGlobal/openmls.git", branch = "main" }
+openmls_traits        = { git = "https://github.com/KChatGlobal/openmls.git", branch = "main" }
+openmls_rust_crypto   = { git = "https://github.com/KChatGlobal/openmls.git", branch = "main" }
+```
+
+The fork enables fork-resolution and additional storage extensions required by KChat.

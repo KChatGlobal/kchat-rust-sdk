@@ -23,6 +23,19 @@ impl<C: Codec, T: Key<STORAGE_PROVIDER_VERSION>> ToSql for KeyRefWrapper<'_, C, 
     }
 }
 
+pub(super) struct KeyWrapper<C: Codec, T: Key<STORAGE_PROVIDER_VERSION>>(pub T, pub PhantomData<C>);
+
+impl<C: Codec, T> FromSql for KeyWrapper<C, T>
+where
+    T: Key<STORAGE_PROVIDER_VERSION> + serde::de::DeserializeOwned,
+{
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let key = C::from_slice(value.as_blob()?)
+            .map_err(|e| rusqlite::types::FromSqlError::Other(Box::new(e)))?;
+        Ok(Self(key, PhantomData))
+    }
+}
+
 pub(super) struct EntityWrapper<C: Codec, T: Entity<STORAGE_PROVIDER_VERSION>>(
     pub T,
     pub PhantomData<C>,

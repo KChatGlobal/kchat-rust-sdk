@@ -450,7 +450,12 @@ impl UqMls {
         password: Option<String>,
         out_of_order_tolerance: u32,
         maximum_forward_distance: u32,
+        callback: Option<Arc<dyn ProcessMessagesCallback>>,
     ) -> Result<UqMls, Error> {
+        let emit = callback.as_ref().map(|cb| {
+            let cb = cb.clone();
+            move |msg: String| cb.on_trigger(msg)
+        });
         let secret = password.map(SecretString::from);
         let conn = open_group_status_connection(&group_storage_path)?;
 
@@ -463,7 +468,11 @@ impl UqMls {
             out_of_order_tolerance,
             maximum_forward_distance,
             conn,
-            provider: SqliteProvider::new(&storage_path, &secret)?,
+            provider: SqliteProvider::new_with_log(
+                &storage_path,
+                &secret,
+                emit.as_ref().map(|emit| emit as &dyn Fn(String)),
+            )?,
         })
     }
 
@@ -497,7 +506,7 @@ impl UqMls {
     }
 
     pub fn create_group(&self, group_id: &str, public_key: Option<Vec<u8>>) -> Result<(), Error> {
-        if let Ok(_) = core::group(&self.provider, group_id) {
+        if let Ok(_) = core::group(&self.provider, group_id, []) {
             return Err(Error::GroupIsAlreadyExisted);
         }
 
@@ -541,7 +550,7 @@ impl UqMls {
         let result = self
             .provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [])?;
                 let signer = core::group_signer(&mls_group, tx_provider)?;
                 core::add_members(&mut mls_group, tx_provider, &signer, key_packages)
             })
@@ -581,7 +590,7 @@ impl UqMls {
         let result = self
             .provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [])?;
                 let signer = core::group_signer(&mls_group, tx_provider)?;
                 core::readd(
                     &mut mls_group,
@@ -626,7 +635,7 @@ impl UqMls {
         let result = self
             .provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [])?;
                 let signer = core::group_signer(&mls_group, tx_provider)?;
                 core::remove_members(
                     &mut mls_group,
@@ -677,7 +686,7 @@ impl UqMls {
         let result = self
             .provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [message])?;
                 core::process_operation_message(&mut mls_group, tx_provider, message)
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
@@ -690,13 +699,8 @@ impl UqMls {
         group_id: &str,
         message: &[u8],
     ) -> Result<ProcessApplicationMessageResult, Error> {
-        let result = self
-            .provider
-            .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
-                core::process_application_message(&mut mls_group, tx_provider, message)
-            })
-            .map_err(|e| Error::Sqlite(e.to_string()))?;
+        let mut mls_group = core::group(&self.provider, group_id, [message])?;
+        let result = core::process_application_message(&mut mls_group, &self.provider, message)?;
 
         Ok(result.into())
     }
@@ -709,7 +713,8 @@ impl UqMls {
         let result = self
             .provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group =
+                    core::group(tx_provider, group_id, messages.iter().map(Vec::as_slice))?;
                 core::process_many_operation_messages(&mut mls_group, tx_provider, messages, None)
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
@@ -722,13 +727,9 @@ impl UqMls {
         group_id: &str,
         message: &[u8],
     ) -> Result<QueuedProposal, Error> {
-        let queued_proposal = self
-            .provider
-            .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
-                core::process_proposal_message(&mut mls_group, tx_provider, message)
-            })
-            .map_err(|e| Error::Sqlite(e.to_string()))?;
+        let mut mls_group = core::group(&self.provider, group_id, [message])?;
+        let queued_proposal =
+            core::process_proposal_message(&mut mls_group, &self.provider, message)?;
 
         Ok(queued_proposal.into())
     }
@@ -764,49 +765,37 @@ impl UqMls {
 
         emit(format!("start encrypt message, group {}", group_id));
 
-        let encrypted = self
-            .provider
-            .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id).map_err(|err| {
-                    emit(format!(
-                        "encrypt message - load group error, group {}: {}",
-                        group_id, err
-                    ));
-                    err
-                })?;
-                emit(format!(
-                    "encrypt message - load group done, group {}",
-                    group_id
-                ));
+        let mut mls_group = core::group(&self.provider, group_id, []).map_err(|err| {
+            emit(format!(
+                "encrypt message - load group error, group {}: {}",
+                group_id, err
+            ));
+            err
+        })?;
+        emit(format!(
+            "encrypt message - load group done, group {}",
+            group_id
+        ));
 
-                let signer = core::group_signer(&mls_group, tx_provider).map_err(|err| {
-                    emit(format!(
-                        "encrypt message - get signer error, group {}: {}",
-                        group_id, err
-                    ));
-                    err
-                })?;
-                emit(format!(
-                    "encrypt message - get signer done, group {}",
-                    group_id
-                ));
+        let signer = core::group_signer(&mls_group, &self.provider).map_err(|err| {
+            emit(format!(
+                "encrypt message - get signer error, group {}: {}",
+                group_id, err
+            ));
+            err
+        })?;
+        emit(format!(
+            "encrypt message - get signer done, group {}",
+            group_id
+        ));
 
-                core::encrypt_message(&mut mls_group, tx_provider, &signer, message).map_err(
-                    |err| {
-                        emit(format!(
-                            "encrypt message error, group {}: {}",
-                            group_id, err
-                        ));
-                        err
-                    },
-                )
-            })
+        let encrypted = core::encrypt_message(&mut mls_group, &self.provider, &signer, message)
             .map_err(|err| {
                 emit(format!(
                     "encrypt message error, group {}: {}",
                     group_id, err
                 ));
-                Error::Sqlite(err.to_string())
+                err
             })?;
 
         emit(format!("end encrypt message, group {}", group_id));
@@ -815,7 +804,7 @@ impl UqMls {
     }
 
     pub fn export_group_info(&self, group_id: &str) -> Result<Vec<u8>, Error> {
-        let mls_group = core::group(&self.provider, group_id)?;
+        let mls_group = core::group(&self.provider, group_id, [])?;
         let signer = core::group_signer(&mls_group, &self.provider)?;
         Ok(core::export_group_info(
             &mls_group,
@@ -915,14 +904,9 @@ impl UqMls {
     }
 
     pub fn leave_group(&self, group_id: &str) -> Result<LeaveGroupResult, Error> {
-        let result = self
-            .provider
-            .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
-                let signer = core::group_signer(&mls_group, tx_provider)?;
-                core::leave_group(&mut mls_group, tx_provider, &signer)
-            })
-            .map_err(|e| Error::Sqlite(e.to_string()))?;
+        let mut mls_group = core::group(&self.provider, group_id, [])?;
+        let signer = core::group_signer(&mls_group, &self.provider)?;
+        let result = core::leave_group(&mut mls_group, &self.provider, &signer)?;
 
         Ok(result.into())
     }
@@ -931,7 +915,7 @@ impl UqMls {
         let result = self
             .provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [])?;
                 let signer = core::group_signer(&mls_group, tx_provider)?;
                 core::update_leaf_node(&mut mls_group, tx_provider, &signer)
             })
@@ -945,7 +929,7 @@ impl UqMls {
     pub fn merge_pending_commit(&self, group_id: &str) -> Result<(), Error> {
         self.provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [])?;
                 core::merge_pending_commit(&mut mls_group, tx_provider)
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
@@ -957,7 +941,7 @@ impl UqMls {
     pub fn clear_pending_commit(&self, group_id: &str) -> Result<(), Error> {
         self.provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [])?;
                 core::clear_pending_commit(&mut mls_group, tx_provider)
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
@@ -969,7 +953,7 @@ impl UqMls {
     pub fn clear_pending_proposals(&self, group_id: &str) -> Result<(), Error> {
         self.provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [])?;
                 core::clear_pending_proposals(&mut mls_group, tx_provider)
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
@@ -979,14 +963,14 @@ impl UqMls {
     }
 
     pub fn pending_commit(&self, group_id: &str) -> Result<Option<PendingCommitResult>, Error> {
-        let mls_group = core::group(&self.provider, group_id)?;
+        let mls_group = core::group(&self.provider, group_id, [])?;
         let pending_commit = core::pending_commit(&mls_group);
 
         Ok(pending_commit.map(|commit| commit.into()))
     }
 
     pub fn pending_proposals(&self, group_id: &str) -> Result<PendingProposalsResult, Error> {
-        let mls_group = core::group(&self.provider, group_id)?;
+        let mls_group = core::group(&self.provider, group_id, [])?;
         let result = core::pending_proposals(&mls_group);
 
         Ok(result.into())
@@ -1132,7 +1116,7 @@ impl UqMls {
     pub fn delete_group(&self, group_id: &str) -> Result<(), Error> {
         self.provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id)?;
+                let mut mls_group = core::group(tx_provider, group_id, [])?;
                 core::delete_group(&mut mls_group, tx_provider)
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
@@ -1142,7 +1126,7 @@ impl UqMls {
     }
 
     pub fn members(&self, group_id: &str) -> Result<Vec<String>, Error> {
-        let group = core::group(&self.provider, group_id)?;
+        let group = core::group(&self.provider, group_id, [])?;
 
         let members = group
             .members()

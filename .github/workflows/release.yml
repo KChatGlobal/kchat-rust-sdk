@@ -8,7 +8,7 @@ on:
 jobs:
   validate:
     name: Validate Tag
-    runs-on: ubuntu-latest
+    runs-on: k8s
     if: startsWith(github.ref, 'refs/tags/v')
 
     outputs:
@@ -31,7 +31,11 @@ jobs:
   build-linux:
     name: Build Linux (x86_64)
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: k8s
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Print build information
@@ -45,10 +49,39 @@ jobs:
           echo "🏃 Runner: ${{ runner.os }}"
           echo "═══════════════════════════════════════════════════════════"
 
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::533267093295:role/global-github-actions-role
+          aws-region: ap-southeast-1
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        run: |
+          # Fetch secret JSON
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+
+          # Extract values
+          GH_TOKEN=$(echo "$secret_json" | jq -r --arg k "GH_TOKEN" '.[$k]')
+
+          # Mask the tokens in logs
+          echo "::add-mask::$GH_TOKEN"
+
+          # Export to GitHub environment for next steps
+          echo "GH_TOKEN=$GH_TOKEN" >> $GITHUB_ENV
+      
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Configure git to use GH token
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+        run: |
+          set -e
+          git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          set +x
+          echo "git configured to use GH token"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -116,7 +149,11 @@ jobs:
   build-macos-intel:
     name: Build macOS (x86_64)
     needs: validate
-    runs-on: macos-latest
+    runs-on: macmini
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Print build information
@@ -130,10 +167,39 @@ jobs:
           echo "🏃 Runner: ${{ runner.os }}"
           echo "═══════════════════════════════════════════════════════════"
 
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::533267093295:role/global-github-actions-role
+          aws-region: ap-southeast-1
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        run: |
+          # Fetch secret JSON
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+
+          # Extract values
+          GH_TOKEN=$(echo "$secret_json" | jq -r --arg k "GH_TOKEN" '.[$k]')
+
+          # Mask the tokens in logs
+          echo "::add-mask::$GH_TOKEN"
+
+          # Export to GitHub environment for next steps
+          echo "GH_TOKEN=$GH_TOKEN" >> $GITHUB_ENV
+      
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Configure git to use GH token
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+        run: |
+          set -e
+          git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          set +x
+          echo "git configured to use GH token"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -190,7 +256,7 @@ jobs:
         working-directory: crates/kchat-mls-napi
         run: |
           yarn exec napi build --target x86_64-apple-darwin --release
-
+      
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -205,7 +271,11 @@ jobs:
   build-macos-arm:
     name: Build macOS (arm64)
     needs: validate
-    runs-on: macos-latest
+    runs-on: macmini
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Print build information
@@ -219,10 +289,39 @@ jobs:
           echo "🏃 Runner: ${{ runner.os }}"
           echo "═══════════════════════════════════════════════════════════"
 
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::533267093295:role/global-github-actions-role
+          aws-region: ap-southeast-1
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        run: |
+          # Fetch secret JSON
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+
+          # Extract values
+          GH_TOKEN=$(echo "$secret_json" | jq -r --arg k "GH_TOKEN" '.[$k]')
+
+          # Mask the tokens in logs
+          echo "::add-mask::$GH_TOKEN"
+
+          # Export to GitHub environment for next steps
+          echo "GH_TOKEN=$GH_TOKEN" >> $GITHUB_ENV
+      
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Configure git to use GH token
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+        run: |
+          set -e
+          git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          set +x
+          echo "git configured to use GH token"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -274,7 +373,7 @@ jobs:
         working-directory: crates/kchat-mls-napi
         run: |
           yarn exec napi build --target aarch64-apple-darwin --release
-
+      
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -289,34 +388,130 @@ jobs:
   build-windows:
     name: Build Windows (x86_64)
     needs: validate
-    runs-on: windows-latest
+    runs-on: windows
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Print build information
-        shell: bash
+        shell: powershell
         run: |
-          echo "═══════════════════════════════════════════════════════════"
-          echo "🪟 Windows Build Started"
-          echo "═══════════════════════════════════════════════════════════"
-          echo "📋 Version: ${{ needs.validate.outputs.tag_name }}"
-          echo "💻 Platform: Windows x86_64"
-          echo "🏃 Runner: ${{ runner.os }}"
-          echo "═══════════════════════════════════════════════════════════"
+          Write-Output "==========================================================="
+          Write-Output "Windows Build Started"
+          Write-Output "==========================================================="
+          Write-Output "Version: ${{ needs.validate.outputs.tag_name }}"
+          Write-Output "Platform: Windows x86_64"
+          Write-Output "Runner: ${{ runner.os }}"
+          Write-Output "==========================================================="
 
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::533267093295:role/global-github-actions-role
+          aws-region: ap-southeast-1
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        id: fetch_ghtoken
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $secretJson = aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1
+          $secret = $secretJson | ConvertFrom-Json
+
+          # Only export GH_TOKEN to avoid invalid GITHUB_ENV formatting from other secret values.
+          $gh = $secret.GH_TOKEN
+          if ($null -eq $gh -or $gh -eq '') {
+            throw 'GH_TOKEN not found or empty in AWS secret "github-action".'
+          }
+
+          Write-Output ("::add-mask::{0}" -f $gh)
+          Add-Content -Path $env:GITHUB_ENV -Value ("GH_TOKEN={0}" -f $gh)
+          Add-Content -Path $env:GITHUB_OUTPUT -Value ("gh_token={0}" -f $gh)
+      
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Configure git to use GH token
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = "https://$env:GH_TOKEN@github.com/"
+          git config --global "url.$prefix.insteadOf" "https://github.com/"
+          Write-Output "git configured to use GH token"
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+          Start-Process -FilePath .\rustup-init.exe -ArgumentList '-y --default-toolchain stable --profile minimal' -NoNewWindow -Wait
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.cargo\bin"
+          $env:Path += ";$env:USERPROFILE\.cargo\bin"
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version
+          cargo --version
 
       - name: Configure Node.js environment
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Setup Perl for OpenSSL build
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/StrawberryPerl/Perl-Dist-Strawberry/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -match '64bit.*portable\.zip$' } | Select-Object -First 1
+          if (-not $asset) {
+            throw "Unable to find Strawberry Perl 64-bit portable zip in latest release."
+          }
+
+          $perlZip = Join-Path $env:RUNNER_TEMP $asset.name
+          $perlDir = Join-Path $env:RUNNER_TEMP "strawberry-perl"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $perlZip
+          if (Test-Path $perlDir) { Remove-Item -Recurse -Force $perlDir }
+          Expand-Archive -LiteralPath $perlZip -DestinationPath $perlDir -Force
+
+          $perlExe = Get-ChildItem -Path $perlDir -Recurse -Filter perl.exe -ErrorAction Stop | Select-Object -First 1 -ExpandProperty FullName
+          if (-not (Test-Path $perlExe)) {
+            throw "Strawberry Perl executable not found after extraction."
+          }
+          $perlBin = Split-Path -Path $perlExe -Parent
+          $perlRoot = Split-Path -Path $perlBin -Parent
+          $cBin = Join-Path $perlRoot "c\bin"
+          $perlShimDir = Join-Path $env:RUNNER_TEMP "perl-shim"
+          $perlShim = Join-Path $perlShimDir "perl.cmd"
+          New-Item -ItemType Directory -Path $perlShimDir -Force | Out-Null
+          Set-Content -Path $perlShim -Value "@echo off`r`n`"$perlExe`" %*" -Encoding ASCII
+
+          Add-Content -Path $env:GITHUB_PATH -Value $perlShimDir
+          Add-Content -Path $env:GITHUB_PATH -Value $perlBin
+          if (Test-Path $cBin) {
+            Add-Content -Path $env:GITHUB_PATH -Value $cBin
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value ("PERL={0}" -f $perlExe)
+          Add-Content -Path $env:GITHUB_ENV -Value ("PERL_SHIM_DIR={0}" -f $perlShimDir)
+          Add-Content -Path $env:GITHUB_ENV -Value ("STRAWBERRY_PERL_BIN={0}" -f $perlBin)
+          Add-Content -Path $env:GITHUB_ENV -Value ("STRAWBERRY_PERL_C_BIN={0}" -f $cBin)
+          $env:PERL = $perlExe
+          $env:Path = "$perlShimDir;$perlBin;$cBin;$env:Path"
+
+          Write-Output ("Using Strawberry Perl: {0}" -f $perlExe)
+          where.exe perl
+          $perlVersionOutput = & perl -v 2>&1
+          $perlExitCode = $LASTEXITCODE
+          $perlVersionOutput | ForEach-Object { Write-Output $_ }
+          Write-Output ("perl -v exit code: {0}" -f $perlExitCode)
+          if ($perlExitCode -ne 0) {
+            throw "perl -v failed with exit code $perlExitCode"
+          }
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -343,22 +538,54 @@ jobs:
             ${{ runner.os }}-yarn-
 
       - name: Enable Yarn via Corepack
-        shell: bash
+        shell: powershell
+        working-directory: crates/kchat-mls-napi
         run: |
           corepack enable
           corepack prepare yarn@4.9.1 --activate
           yarn --version
 
       - name: Install dependencies
+        shell: powershell
         working-directory: crates/kchat-mls-napi
         run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PERL_SHIM_DIR) {
+            $env:Path = "$env:PERL_SHIM_DIR;$env:STRAWBERRY_PERL_BIN;$env:STRAWBERRY_PERL_C_BIN;$env:Path"
+          }
+          Write-Output ("PERL={0}" -f $env:PERL)
+          where.exe perl
+          Set-Location $PWD
+          Get-ChildItem -Path $env:TEMP -Recurse -Filter build.log -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'xfs-' } | Remove-Item -Force -ErrorAction SilentlyContinue
           yarn install --immutable
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "yarn install failed, dumping Yarn build logs from TEMP if present..."
+            $logFiles = Get-ChildItem -Path $env:TEMP -Recurse -Filter build.log -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'xfs-' } | Sort-Object LastWriteTime -Descending
+            if ($logFiles) {
+              foreach ($file in $logFiles) {
+                Write-Output ("--- BEGIN {0} ---" -f $file.FullName)
+                Get-Content -Path $file.FullName -ErrorAction SilentlyContinue
+                Write-Output ("--- END {0} ---" -f $file.FullName)
+              }
+            } else {
+              Write-Output "No Yarn xfs build.log files found under TEMP."
+            }
+            exit $LASTEXITCODE
+          }
 
       - name: Build NAPI module
+        shell: powershell
         working-directory: crates/kchat-mls-napi
         run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PERL_SHIM_DIR) {
+            $env:Path = "$env:PERL_SHIM_DIR;$env:STRAWBERRY_PERL_BIN;$env:STRAWBERRY_PERL_C_BIN;$env:Path"
+          }
+          Write-Output ("PERL={0}" -f $env:PERL)
+          where.exe perl
+          Set-Location $PWD
           yarn exec napi build --target x86_64-pc-windows-msvc --release
-
+      
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -374,7 +601,7 @@ jobs:
     name: Create Release and Upload Assets
     needs:
       [validate, build-linux, build-macos-intel, build-macos-arm, build-windows]
-    runs-on: ubuntu-latest
+    runs-on: k8s
     if: success()
 
     permissions:

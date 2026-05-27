@@ -41,6 +41,7 @@ impl TestClient {
             None,
             OUT_OF_ORDER_TOLERANCE,
             MAXIMUM_FORWARD_DISTANCE,
+            None,
         )
         .expect("should create sqlite-backed UqMls");
 
@@ -56,6 +57,7 @@ impl TestClient {
             None,
             OUT_OF_ORDER_TOLERANCE,
             MAXIMUM_FORWARD_DISTANCE,
+            None,
         )
         .expect("should reopen sqlite-backed UqMls");
 

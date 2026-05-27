@@ -1,14 +1,16 @@
+use std::collections::BTreeSet;
+
 use openmls::{
     group::{
-        GroupContext, GroupId, Member, MlsGroup, MlsGroupCreateConfig, MlsGroupJoinConfig,
-        ProposalStore, PublicGroup, StagedWelcome,
+        GroupContext, GroupEpoch, GroupId, LoadOptimizeError, Member, MlsGroup,
+        MlsGroupCreateConfig, MlsGroupJoinConfig, ProposalStore, PublicGroup, StagedWelcome,
     },
     messages::proposals::Proposal as MlsProposal,
     prelude::{
         BasicCredential, Capabilities, Ciphersuite, ExtensionType, KeyPackage, KeyPackageIn,
         KeyPackageVerifyError, LeafNodeIndex, LeafNodeParameters, Lifetime, MlsMessageBodyIn,
         MlsMessageBodyOut, MlsMessageIn, ProcessedMessageContent, Proposal as OpenMlsProposal,
-        ProtocolVersion, Sender,
+        ProtocolMessage, ProtocolVersion, Sender,
         group_info::VerifiableGroupInfo,
         tls_codec::{Deserialize as _, Serialize as _},
     },
@@ -26,6 +28,22 @@ use crate::{
 
 pub const DEFAULT_CIPHERSUITE: Ciphersuite =
     Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
+
+fn protocol_message(message: &[u8]) -> Result<ProtocolMessage, Error> {
+    Ok(MlsMessageIn::tls_deserialize_exact(message)?.try_into_protocol_message()?)
+}
+
+fn protocol_message_epochs<'a, Messages>(messages: Messages) -> Result<Vec<GroupEpoch>, Error>
+where
+    Messages: IntoIterator<Item = &'a [u8]>,
+{
+    let mut epochs = BTreeSet::new();
+    for message in messages {
+        epochs.insert(protocol_message(message)?.epoch().as_u64());
+    }
+
+    Ok(epochs.into_iter().map(Into::into).collect())
+}
 
 /// Get the own signature key pair from a group.
 ///
@@ -235,6 +253,17 @@ pub fn process_application_message<Provider: OpenMlsProvider>(
     }
 }
 
+/// Processes an application message after loading only the message epoch secrets
+/// when epoch-based storage is available.
+pub fn process_application_message_for_group<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+    message: &[u8],
+) -> Result<ProcessApplicationMessageResult, Error> {
+    let mut group = group(provider, group_id, [message])?;
+    process_application_message(&mut group, provider, message)
+}
+
 #[derive(Debug, Default)]
 pub struct ProcessOperationMessageResult {
     pub commit: Option<Vec<u8>>,
@@ -281,6 +310,17 @@ pub fn process_operation_message<Provider: OpenMlsProvider>(
         }
         _ => Err(Error::InvalidOperationMessage),
     }
+}
+
+/// Processes an operation message after loading only the message epoch secrets
+/// when epoch-based storage is available.
+pub fn process_operation_message_for_group<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+    message: &[u8],
+) -> Result<ProcessOperationMessageResult, Error> {
+    let mut group = group(provider, group_id, [message])?;
+    process_operation_message(&mut group, provider, message)
 }
 
 #[derive(Debug, Default)]
@@ -351,6 +391,18 @@ pub fn process_many_operation_messages<Provider: OpenMlsProvider>(
     })
 }
 
+/// Processes operation messages after loading only the epochs referenced by the
+/// batch when epoch-based storage is available.
+pub fn process_many_operation_messages_for_group<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+    messages: &[Vec<u8>],
+    log: Option<&dyn Fn(String)>,
+) -> Result<ProcessManyOperationMessagesResult, Error> {
+    let mut group = group(provider, group_id, messages.iter().map(Vec::as_slice))?;
+    process_many_operation_messages(&mut group, provider, messages, log)
+}
+
 pub struct QueuedProposal {
     pub group_id: String,
     pub proposal: Proposal,
@@ -394,6 +446,17 @@ pub fn process_proposal_message<Provider: OpenMlsProvider>(
     Err(Error::InvalidProposalMessage)
 }
 
+/// Decrypts a proposal message after loading only the message epoch secrets when
+/// epoch-based storage is available.
+pub fn process_proposal_message_for_group<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+    message: &[u8],
+) -> Result<QueuedProposal, Error> {
+    let mut group = group(provider, group_id, [message])?;
+    process_proposal_message(&mut group, provider, message)
+}
+
 /// Encrypt message, return MlsMessageOut.
 pub fn encrypt_message<Provider: OpenMlsProvider>(
     group: &mut MlsGroup,
@@ -404,6 +467,18 @@ pub fn encrypt_message<Provider: OpenMlsProvider>(
     let mls_message_out = group.create_message(provider, signer, message)?;
 
     Ok(mls_message_out.tls_serialize_detached()?)
+}
+
+/// Encrypts a message after loading the current epoch secrets only when
+/// epoch-based storage is available.
+pub fn encrypt_message_for_group<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+    message: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mut group = group_current_epoch_message_secrets(provider, group_id)?;
+    let signer = group_signer(&group, provider)?;
+    encrypt_message(&mut group, provider, &signer, message)
 }
 
 /// Export group info
@@ -704,21 +779,78 @@ pub fn pending_proposals(group: &MlsGroup) -> PendingProposalsResult {
     }
 }
 
-/// Get MLS group
-pub fn group<Provider: OpenMlsProvider>(
+/// Get MLS group.
+///
+/// Pass the MLS messages that will be processed next to preload their exact
+/// epoch message secrets during group load. Use an empty iterator for
+/// current-only flows.
+pub fn group<'a, Provider, Messages>(
     provider: &Provider,
     group_id: &str,
-) -> Result<MlsGroup, Error> {
-    let Some(group) = MlsGroup::load(
+    messages: Messages,
+) -> Result<MlsGroup, Error>
+where
+    Provider: OpenMlsProvider,
+    Messages: IntoIterator<Item = &'a [u8]>,
+{
+    let group_id = GroupId::from_slice(group_id.as_bytes());
+    let epochs = protocol_message_epochs(messages)?;
+    let group = if openmls_traits::storage::StorageProvider::supports_epoch_message_secrets(
         provider.storage(),
-        &GroupId::from_slice(group_id.as_bytes()),
-    )
-    .map_err(|e| Error::Storage(e.to_string()))?
-    else {
-        return Err(Error::GroupIsNotExisted);
+    ) {
+        match MlsGroup::load_optimize(provider.storage(), &group_id, epochs) {
+            Ok(Some(group)) => group,
+            Ok(None) | Err(LoadOptimizeError::MissingGroupEpochMessageSecretsMetadata) => {
+                let Some(group) = MlsGroup::load(provider.storage(), &group_id)
+                    .map_err(|e| Error::Storage(e.to_string()))?
+                else {
+                    return Err(Error::GroupIsNotExisted);
+                };
+                group
+            }
+            Err(err) => return Err(Error::Storage(err.to_string())),
+        }
+    } else {
+        let Some(group) = MlsGroup::load(provider.storage(), &group_id)
+            .map_err(|e| Error::Storage(e.to_string()))?
+        else {
+            return Err(Error::GroupIsNotExisted);
+        };
+        group
     };
 
     Ok(group)
+}
+
+/// Get MLS group with current epoch message secrets only when epoch-based
+/// storage is available.
+pub fn group_current_epoch_message_secrets<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+) -> Result<MlsGroup, Error> {
+    group(provider, group_id, std::iter::empty())
+}
+
+/// Get MLS group with the current epoch and selected past epoch message secrets
+/// when epoch-based storage is available.
+pub fn group_with_epoch_message_secrets<Provider, Epochs>(
+    provider: &Provider,
+    group_id: &str,
+    epochs: Epochs,
+) -> Result<MlsGroup, Error>
+where
+    Provider: OpenMlsProvider,
+    Epochs: IntoIterator<Item = GroupEpoch>,
+{
+    let openmls_group_id = GroupId::from_slice(group_id.as_bytes());
+    match MlsGroup::load_optimize(provider.storage(), &openmls_group_id, epochs) {
+        Ok(Some(group)) => Ok(group),
+        Ok(None) => Err(Error::GroupIsNotExisted),
+        Err(LoadOptimizeError::MissingGroupEpochMessageSecretsMetadata) => {
+            group(provider, group_id, std::iter::empty())
+        }
+        Err(err) => Err(Error::Storage(err.to_string())),
+    }
 }
 
 pub fn group_context<Provider: OpenMlsProvider>(

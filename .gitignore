@@ -6,6 +6,10 @@
 .vscode/
 .kiro/
 
+# Local secrets
+.env*
+!.env.example
+
 # Rust build artifacts
 target/
 
@@ -33,3 +37,7 @@ aidlc-docs/
 report
 vendor-openmls/
 DEBUG.md
+.claude/
+.gitnexus/
+
+docs/

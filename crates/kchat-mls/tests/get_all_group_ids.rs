@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -12,15 +13,17 @@ use uq_openmls::{
 
 use kchat_mls::get_all_group_ids;
 
+static TEMP_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn temp_db_path() -> PathBuf {
+    let counter = TEMP_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "kchat-mls-get-all-group-ids-{}-{}.sqlite",
+        "kchat-mls-get-all-group-ids-{}-{counter}-{nanos}.sqlite",
         std::process::id(),
-        nanos
     ))
 }
 

@@ -11,7 +11,10 @@ use std::time::Duration;
 use kchat_storage_provider::{
     Codec, SqliteConnectionPool, SqliteStorageProvider, TransactionalStorageProvider,
 };
-use openmls::prelude::OpenMlsProvider;
+use openmls::{
+    group::{GroupId, MlsGroup},
+    prelude::OpenMlsProvider,
+};
 use openmls_rust_crypto::RustCrypto;
 use rusqlite::Connection;
 use secrecy::{ExposeSecret, SecretString};
@@ -80,24 +83,78 @@ fn configure_connection(
     Ok(())
 }
 
+fn migrate_group_epoch_message_secrets(
+    provider: &TransactionalSqliteProvider<'_>,
+    group_id: &GroupId,
+) -> Result<(), Error> {
+    let Some(message_secrets) =
+        MlsGroup::export_epoch_message_secrets_snapshot_from_storage(provider.storage(), group_id)
+            .map_err(|e| Error::Storage(e.to_string()))?
+    else {
+        return Ok(());
+    };
+
+    provider
+        .storage()
+        .replace_group_epoch_message_secrets(group_id, message_secrets)
+        .map_err(Error::from)
+}
+
 impl SqliteProvider {
     pub fn new(storage_path: &str, secret: &Option<SecretString>) -> Result<Self, Error> {
+        Self::new_with_log(storage_path, secret, None)
+    }
+
+    pub fn new_with_log(
+        storage_path: &str,
+        secret: &Option<SecretString>,
+        log: Option<&dyn Fn(String)>,
+    ) -> Result<Self, Error> {
+        let emit = |msg: String| {
+            if let Some(log) = log {
+                log(msg);
+            }
+        };
         let storage_path = storage_path.to_owned();
+        emit(format!(
+            "SqliteProvider::new start storage_path={}",
+            storage_path
+        ));
         let secret = secret.clone();
+        let connection_storage_path = storage_path.clone();
         let pool = SqliteConnectionPool::new(SQLITE_CONNECTION_POOL_SIZE, move || {
-            let connection = Connection::open(&storage_path)?;
+            let connection = Connection::open(&connection_storage_path)?;
             configure_connection(&connection, &secret)?;
             Ok(connection)
         });
         let mut mls_storage = SqliteStorageProvider::new(pool);
-        mls_storage
-            .run_migrations()
-            .map_err(|e| Error::SqliteMigration(e.to_string()))?;
+        mls_storage.run_migrations().map_err(|e| {
+            emit(format!(
+                "sqlite schema migration error storage_path={}: {}",
+                storage_path, e
+            ));
+            Error::SqliteMigration(e.to_string())
+        })?;
+        emit(format!(
+            "sqlite schema migration done storage_path={}",
+            storage_path
+        ));
 
-        Ok(Self {
+        let provider = Self {
             crypto: RustCrypto::default(),
             mls_storage,
-        })
+        };
+        emit(format!(
+            "epoch message secrets migration start storage_path={}",
+            storage_path
+        ));
+        provider.migrate_epoch_message_secrets(log);
+        emit(format!(
+            "epoch message secrets migration end storage_path={}",
+            storage_path
+        ));
+
+        Ok(provider)
     }
 
     /// Execute a closure within a single SQLite transaction-backed provider.
@@ -114,6 +171,56 @@ impl SqliteProvider {
             };
             f(&tx_provider).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
         })
+    }
+
+    fn migrate_epoch_message_secrets(&self, log: Option<&dyn Fn(String)>) {
+        if let Err(err) = self.try_migrate_epoch_message_secrets(log) {
+            if let Some(log) = log {
+                log(format!("epoch message secrets migration error err={}", err));
+            }
+        }
+    }
+
+    fn try_migrate_epoch_message_secrets(&self, log: Option<&dyn Fn(String)>) -> Result<(), Error> {
+        let emit = |msg: String| {
+            if let Some(log) = log {
+                log(msg);
+            }
+        };
+        let group_ids = self
+            .mls_storage
+            .list_group_ids_with_message_secrets::<GroupId>()?;
+        emit(format!(
+            "epoch message secrets migration selected batch count={}",
+            group_ids.len()
+        ));
+
+        for group_id in group_ids {
+            let group_id_text = String::from_utf8_lossy(group_id.as_slice()).to_string();
+            emit(format!(
+                "epoch message secrets migration group start group_id={}",
+                group_id_text
+            ));
+            match self.mls_storage.transaction(|tx| {
+                let tx_provider = TransactionalSqliteProvider {
+                    crypto: &self.crypto,
+                    mls_storage: TransactionalStorageProvider::new(tx),
+                };
+                migrate_group_epoch_message_secrets(&tx_provider, &group_id)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+            }) {
+                Ok(_) => emit(format!(
+                    "epoch message secrets migration group done group_id={}",
+                    group_id_text
+                )),
+                Err(err) => emit(format!(
+                    "epoch message secrets migration group error group_id={} err={}",
+                    group_id_text, err
+                )),
+            }
+        }
+
+        Ok(())
     }
 }
 

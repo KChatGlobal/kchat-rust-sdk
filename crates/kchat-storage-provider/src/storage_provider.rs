@@ -17,6 +17,8 @@ use crate::{
     },
     epoch_key_pairs::{StorableEpochKeyPairs, StorableEpochKeyPairsRef},
     group_data::{GroupDataType, StorableGroupData, StorableGroupDataRef},
+    group_epoch_message_secrets::StorableGroupEpochMessageSecrets,
+    group_epoch_meta::StorableGroupEpochMeta,
     key_packages::{StorableHashRef, StorableKeyPackage, StorableKeyPackageRef},
     own_leaf_nodes::{StorableLeafNode, StorableLeafNodeRef},
     proposals::{StorableProposal, StorableProposalRef},
@@ -201,6 +203,10 @@ impl<'tx, C: Codec> TransactionalStorageProvider<'tx, C> {
             tx,
             _codec: PhantomData,
         }
+    }
+
+    pub(crate) fn tx(&self) -> &'tx rusqlite::Transaction<'tx> {
+        self.tx
     }
 }
 
@@ -548,6 +554,82 @@ impl<C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION> for SqliteStorageProvid
         group_id: &GroupId,
     ) -> Result<Option<MessageSecrets>, Self::Error> {
         StorableGroupData::load::<C, _>(&self.connection, group_id, GroupDataType::MessageSecrets)
+    }
+
+    fn supports_epoch_message_secrets(&self) -> bool {
+        true
+    }
+
+    fn is_group_epoch_message_secrets_migrated<
+        GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<bool, Self::Error> {
+        StorableGroupEpochMeta::is_migration_done::<C, _>(&self.connection, group_id)
+    }
+
+    fn group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        epoch: u64,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        StorableGroupEpochMessageSecrets::load::<C, _>(&self.connection, group_id, epoch)
+    }
+
+    fn write_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        epoch: u64,
+        message_secrets: &[u8],
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMessageSecrets::store::<C, _>(
+            &self.connection,
+            group_id,
+            epoch,
+            message_secrets,
+        )
+    }
+
+    fn replace_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        message_secrets: Vec<(u64, Vec<u8>)>,
+    ) -> Result<(), Self::Error> {
+        self.connection.transaction(|tx| {
+            StorableGroupEpochMessageSecrets::replace_in_tx::<C, _>(tx, group_id, message_secrets)
+        })
+    }
+
+    fn mark_group_epoch_message_secrets_migrated<
+        GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+        done: bool,
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMeta::mark_migration_done::<C, _>(&self.connection, group_id, done)
+    }
+
+    fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMessageSecrets::delete::<C, _>(&self.connection, group_id)
+    }
+
+    fn prune_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        keep_from_epoch: u64,
+        current_epoch: u64,
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMessageSecrets::prune::<C, _>(
+            &self.connection,
+            group_id,
+            keep_from_epoch,
+            current_epoch,
+        )
     }
 
     fn resumption_psk_store<
@@ -1178,6 +1260,80 @@ impl<'tx, C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION>
         group_id: &GroupId,
     ) -> Result<Option<MessageSecrets>, Self::Error> {
         StorableGroupData::load_in_tx::<C, _>(self.tx, group_id, GroupDataType::MessageSecrets)
+    }
+
+    fn supports_epoch_message_secrets(&self) -> bool {
+        true
+    }
+
+    fn is_group_epoch_message_secrets_migrated<
+        GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<bool, Self::Error> {
+        StorableGroupEpochMeta::is_migration_done_in_tx::<C, _>(self.tx, group_id)
+    }
+
+    fn group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        epoch: u64,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        StorableGroupEpochMessageSecrets::load_in_tx::<C, _>(self.tx, group_id, epoch)
+    }
+
+    fn write_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        epoch: u64,
+        message_secrets: &[u8],
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMessageSecrets::store_in_tx::<C, _>(
+            self.tx,
+            group_id,
+            epoch,
+            message_secrets,
+        )
+    }
+
+    fn replace_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        message_secrets: Vec<(u64, Vec<u8>)>,
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMessageSecrets::replace_in_tx::<C, _>(self.tx, group_id, message_secrets)
+    }
+
+    fn mark_group_epoch_message_secrets_migrated<
+        GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+        done: bool,
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMeta::mark_migration_done_in_tx::<C, _>(self.tx, group_id, done)
+    }
+
+    fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMessageSecrets::delete_in_tx::<C, _>(self.tx, group_id)
+    }
+
+    fn prune_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        keep_from_epoch: u64,
+        current_epoch: u64,
+    ) -> Result<(), Self::Error> {
+        StorableGroupEpochMessageSecrets::prune_in_tx::<C, _>(
+            self.tx,
+            group_id,
+            keep_from_epoch,
+            current_epoch,
+        )
     }
 
     fn resumption_psk_store<

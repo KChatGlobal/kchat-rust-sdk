@@ -13,8 +13,8 @@ use openmls_traits::OpenMlsProvider;
 use rusqlite::{Connection, params};
 use uq_openmls::{
     core::{
-        Proposal, clear_pending_commit, delete_group, group, merge_pending_commit,
-        process_operation_message, process_proposal_message, process_welcome,
+        Proposal, clear_pending_commit, delete_group, group, group_with_epoch_message_secrets,
+        merge_pending_commit, process_operation_message, process_proposal_message, process_welcome,
     },
     error::Error,
     provider::SqliteProvider,
@@ -302,7 +302,13 @@ pub fn process_all_messages(
         let group_id = &messages_of_group.group_id;
         emit_log(log, || format!("process message of group {}", group_id));
 
-        let mut mls_group: Option<MlsGroup> = group(provider, group_id).ok();
+        let preload_epochs = messages_of_group
+            .messages
+            .iter()
+            .filter(|message| message.message_type != MessageType::Welcome)
+            .map(|message| message.epoch.into());
+        let mut mls_group: Option<MlsGroup> =
+            group_with_epoch_message_secrets(provider, group_id, preload_epochs).ok();
 
         let mut group_deleted = false;
         // Check desync to merge or clear pending commit
@@ -336,7 +342,7 @@ pub fn process_all_messages(
                                 mls_group = Some(
                                     provider
                                         .transaction(|tx_provider| {
-                                            let mut tx_group = group(tx_provider, group_id)?;
+                                            let mut tx_group = group(tx_provider, group_id, [])?;
                                             merge_pending_commit(&mut tx_group, tx_provider)?;
                                             Ok(tx_group)
                                         })
@@ -345,7 +351,7 @@ pub fn process_all_messages(
                             } else {
                                 provider
                                     .transaction(|tx_provider| {
-                                        let mut tx_group = group(tx_provider, group_id)?;
+                                        let mut tx_group = group(tx_provider, group_id, [])?;
                                         delete_group(&mut tx_group, tx_provider)
                                     })
                                     .map_err(|e| Error::Storage(e.to_string()))?;
@@ -364,7 +370,7 @@ pub fn process_all_messages(
                             if !own_member_id.contains(&msg.sender) {
                                 provider
                                     .transaction(|tx_provider| {
-                                        let mut tx_group = group(tx_provider, group_id)?;
+                                        let mut tx_group = group(tx_provider, group_id, [])?;
                                         delete_group(&mut tx_group, tx_provider)
                                     })
                                     .map_err(|e| Error::Storage(e.to_string()))?;
@@ -375,7 +381,7 @@ pub fn process_all_messages(
                                 mls_group = Some(
                                     provider
                                         .transaction(|tx_provider| {
-                                            let mut tx_group = group(tx_provider, group_id)?;
+                                            let mut tx_group = group(tx_provider, group_id, [])?;
                                             merge_pending_commit(&mut tx_group, tx_provider)?;
                                             Ok(tx_group)
                                         })
@@ -385,7 +391,7 @@ pub fn process_all_messages(
                         } else {
                             provider
                                 .transaction(|tx_provider| {
-                                    let mut tx_group = group(tx_provider, group_id)?;
+                                    let mut tx_group = group(tx_provider, group_id, [])?;
                                     delete_group(&mut tx_group, tx_provider)
                                 })
                                 .map_err(|e| Error::Storage(e.to_string()))?;
@@ -406,7 +412,7 @@ pub fn process_all_messages(
                             mls_group = Some(
                                 provider
                                     .transaction(|tx_provider| {
-                                        let mut tx_group = group(tx_provider, group_id)?;
+                                        let mut tx_group = group(tx_provider, group_id, [])?;
                                         clear_pending_commit(&mut tx_group, tx_provider)?;
                                         Ok(tx_group)
                                     })
@@ -416,7 +422,7 @@ pub fn process_all_messages(
                             mls_group = Some(
                                 provider
                                     .transaction(|tx_provider| {
-                                        let mut tx_group = group(tx_provider, group_id)?;
+                                        let mut tx_group = group(tx_provider, group_id, [])?;
                                         merge_pending_commit(&mut tx_group, tx_provider)?;
                                         Ok(tx_group)
                                     })
@@ -427,7 +433,7 @@ pub fn process_all_messages(
                         mls_group = Some(
                             provider
                                 .transaction(|tx_provider| {
-                                    let mut tx_group = group(tx_provider, group_id)?;
+                                    let mut tx_group = group(tx_provider, group_id, [])?;
                                     clear_pending_commit(&mut tx_group, tx_provider)?;
                                     Ok(tx_group)
                                 })
@@ -554,7 +560,11 @@ pub fn process_all_messages(
                     });
                     if mls_group.is_some() {
                         if !commit_group_loaded {
-                            match group(provider, group_id) {
+                            match group_with_epoch_message_secrets(
+                                provider,
+                                group_id,
+                                [msg.epoch.into()],
+                            ) {
                                 Ok(fresh_group) => {
                                     emit_log(log, || {
                                         format!(
@@ -815,6 +825,7 @@ pub fn extract_jid_from_member_id(id: &str) -> Option<String> {
 }
 pub fn get_all_group_ids(provider: &SqliteProvider) -> Vec<String> {
     let mut group_ids = Vec::new();
+    let mut seen = HashSet::new();
 
     let connection = match provider.storage().connection_pool().checkout() {
         Ok(conn) => conn,
@@ -838,7 +849,10 @@ pub fn get_all_group_ids(provider: &SqliteProvider) -> Vec<String> {
 
     for blob in blobs {
         if let Ok(group_id) = serde_json::from_slice::<openmls::group::GroupId>(&blob) {
-            group_ids.push(String::from_utf8_lossy(group_id.as_slice()).to_string());
+            let group_id = String::from_utf8_lossy(group_id.as_slice()).to_string();
+            if seen.insert(group_id.clone()) {
+                group_ids.push(group_id);
+            }
         }
     }
 

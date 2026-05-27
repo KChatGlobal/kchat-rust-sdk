@@ -66,7 +66,7 @@ fn setup_large_group(
         key_packages.push(key_package);
     }
 
-    let mut mls_group = group(provider, GROUP_ID)?;
+    let mut mls_group = group(provider, GROUP_ID, [])?;
     let signer = group_signer(&mls_group, provider)?;
     let _ = add_members(&mut mls_group, provider, &signer, &key_packages)?;
     merge_pending_commit(&mut mls_group, provider)?;
@@ -80,7 +80,7 @@ fn measure_encrypt_no_cache(
 ) -> Result<Duration, Box<dyn std::error::Error>> {
     let start = Instant::now();
     for idx in 0..iterations {
-        let mut mls_group = group(provider, GROUP_ID)?;
+        let mut mls_group = group(provider, GROUP_ID, [])?;
         let signer = group_signer(&mls_group, provider)?;
         let payload = format!("perf_no_cache_{idx}").into_bytes();
         let _ = encrypt_message(&mut mls_group, provider, &signer, &payload)?;
@@ -92,7 +92,7 @@ fn measure_encrypt_cache(
     provider: &SqliteProvider,
     iterations: usize,
 ) -> Result<Duration, Box<dyn std::error::Error>> {
-    let mut mls_group = group(provider, GROUP_ID)?;
+    let mut mls_group = group(provider, GROUP_ID, [])?;
     let signer = group_signer(&mls_group, provider)?;
 
     let start = Instant::now();

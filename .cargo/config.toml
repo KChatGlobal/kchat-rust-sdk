@@ -6,3 +6,6 @@ rustflags = ["-C", "link-arg=-mios-simulator-version-min=16.0"]
 
 [target.x86_64-apple-ios]
 rustflags = ["-C", "link-arg=-mios-simulator-version-min=16.0"]
+
+[net]
+git-fetch-with-cli = true

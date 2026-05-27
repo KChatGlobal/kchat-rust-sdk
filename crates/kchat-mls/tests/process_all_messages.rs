@@ -74,7 +74,7 @@ fn bootstrap_group(
     )
     .expect("should generate receiver key package");
 
-    let mut sender_group = group(sender_provider, group_id).expect("should load sender group");
+    let mut sender_group = group(sender_provider, group_id, []).expect("should load sender group");
     let sender_signer =
         group_signer(&sender_group, sender_provider).expect("should get sender signer");
     let add_result = add_members(
@@ -100,7 +100,7 @@ fn build_commit_messages(
     group_id: &str,
     count: usize,
 ) -> Vec<MlsMessage> {
-    let mut sender_group = group(sender_provider, group_id).expect("should load sender group");
+    let mut sender_group = group(sender_provider, group_id, []).expect("should load sender group");
     let sender_signer =
         group_signer(&sender_group, sender_provider).expect("should get sender signer");
 

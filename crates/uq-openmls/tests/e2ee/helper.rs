@@ -22,7 +22,7 @@ fn with_group<Provider: OpenMlsProvider, R>(
     group_id: &str,
     f: impl FnOnce(&mut MlsGroup) -> Result<R, Error>,
 ) -> Result<R, Error> {
-    let mut group = load_group(provider, group_id)?;
+    let mut group = load_group(provider, group_id, [])?;
     f(&mut group)
 }
 
@@ -177,7 +177,7 @@ pub fn init_group_with_members(
     .unwrap();
 
     // first member add others
-    let mut first_group = load_group(first_provider, group_id).unwrap();
+    let mut first_group = load_group(first_provider, group_id, []).unwrap();
     let signer = core_group_signer(&first_group, first_provider).unwrap();
     let AddMembersResult { welcome, .. } = core_add_members(
         &mut first_group,

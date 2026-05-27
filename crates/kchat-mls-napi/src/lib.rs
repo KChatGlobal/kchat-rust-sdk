@@ -567,56 +567,46 @@ impl_identity_task!(EncryptMessageTask, Vec<u8>, |this| {
         format!("start encrypt message, group {}", this.group_id),
     );
 
-    let encrypted = this
-        .provider
-        .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id).map_err(|e| {
-                emit_debug_log_async(
-                    callback,
-                    format!(
-                        "encrypt message - load group error, group {}: {}",
-                        this.group_id, e
-                    ),
-                );
-                e
-            })?;
-            emit_debug_log_async(
-                callback,
-                format!("encrypt message - load group done, group {}", this.group_id),
-            );
+    let mut mls_group = core::group(&this.provider, &this.group_id, []).map_err(|e| {
+        emit_debug_log_async(
+            callback,
+            format!(
+                "encrypt message - load group error, group {}: {}",
+                this.group_id, e
+            ),
+        );
+        napi::Error::new(napi::Status::GenericFailure, e.to_string())
+    })?;
 
-            let signer = core::group_signer(&mls_group, tx_provider).map_err(|e| {
-                emit_debug_log_async(
-                    callback,
-                    format!(
-                        "encrypt message - get signer error, group {}: {}",
-                        this.group_id, e
-                    ),
-                );
-                e
-            })?;
-            emit_debug_log_async(
-                callback,
-                format!("encrypt message - get signer done, group {}", this.group_id),
-            );
+    emit_debug_log_async(
+        callback,
+        format!("encrypt message - load group done, group {}", this.group_id),
+    );
 
-            core::encrypt_message(&mut mls_group, tx_provider, &signer, &this.message).map_err(
-                |e| {
-                    emit_debug_log_async(
-                        callback,
-                        format!("encrypt message error, group {}: {}", this.group_id, e),
-                    );
-                    e
-                },
-            )
-        })
+    let signer = core::group_signer(&mls_group, &this.provider).map_err(|e| {
+        emit_debug_log_async(
+            callback,
+            format!(
+                "encrypt message - get signer error, group {}: {}",
+                this.group_id, e
+            ),
+        );
+        napi::Error::new(napi::Status::GenericFailure, e.to_string())
+    })?;
+
+    emit_debug_log_async(
+        callback,
+        format!("encrypt message - get signer done, group {}", this.group_id),
+    );
+
+    let encrypted = core::encrypt_message(&mut mls_group, &this.provider, &signer, &this.message)
         .map_err(|e| {
-            emit_debug_log_async(
-                callback,
-                format!("encrypt message error, group {}: {}", this.group_id, e),
-            );
-            napi::Error::new(napi::Status::GenericFailure, e.to_string())
-        })?;
+        emit_debug_log_async(
+            callback,
+            format!("encrypt message error, group {}: {}", this.group_id, e),
+        );
+        napi::Error::new(napi::Status::GenericFailure, e.to_string())
+    })?;
 
     emit_debug_log_async(
         callback,
@@ -641,7 +631,7 @@ impl_identity_task!(MergePendingCommitTask, (), |this| {
     );
     this.provider
         .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id)?;
+            let mut mls_group = core::group(tx_provider, &this.group_id, [])?;
             emit_debug_log_async(
                 callback,
                 format!(
@@ -682,7 +672,7 @@ impl_identity_task!(ClearPendingCommitTask, (), |this| {
     );
     this.provider
         .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id)?;
+            let mut mls_group = core::group(tx_provider, &this.group_id, [])?;
             emit_debug_log_async(
                 callback,
                 format!(
@@ -953,7 +943,7 @@ impl_identity_task!(DeleteGroupTask, (), |this| {
     );
     this.provider
         .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id)?;
+            let mut mls_group = core::group(tx_provider, &this.group_id, [])?;
             emit_debug_log_async(
                 callback,
                 format!("delete group - load group done, group {}", this.group_id),
@@ -994,7 +984,7 @@ impl_identity_task!(CreateGroupTask, (), |this| {
         format!("start create group, group {}", this.group_id),
     );
 
-    if core::group(&this.provider, &this.group_id).is_ok() {
+    if core::group(&this.provider, &this.group_id, []).is_ok() {
         emit_debug_log_async(
             callback,
             format!(
@@ -1065,7 +1055,7 @@ impl_identity_task!(AddMembersTask, AddMembersResult, |this| {
     let result = this
         .provider
         .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id)?;
+            let mut mls_group = core::group(tx_provider, &this.group_id, [])?;
             emit_debug_log_async(
                 callback,
                 format!("add members - load group done, group {}", this.group_id),
@@ -1122,7 +1112,7 @@ impl_identity_task!(RemoveMembersTask, RemoveMembersResult, |this| {
     let result = this
         .provider
         .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id)?;
+            let mut mls_group = core::group(tx_provider, &this.group_id, [])?;
             emit_debug_log_async(
                 callback,
                 format!("remove members - load group done, group {}", this.group_id),
@@ -1205,7 +1195,8 @@ impl_identity_task!(
         let result = this
             .provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, &this.group_id)?;
+                let mut mls_group =
+                    core::group(tx_provider, &this.group_id, [this.message.as_slice()])?;
                 emit_debug_log_async(
                     callback,
                     format!(
@@ -1257,7 +1248,12 @@ impl_identity_task!(
         let result = this
             .provider
             .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, &this.group_id)?;
+                let mut mls_group = core::group(
+                    tx_provider,
+                    &this.group_id,
+                    this.messages.iter().map(Vec::as_slice),
+                )?;
+
                 emit_debug_log_async(
                     callback,
                     format!(
@@ -1265,6 +1261,7 @@ impl_identity_task!(
                         this.group_id
                     ),
                 );
+
                 core::process_many_operation_messages(
                     &mut mls_group,
                     tx_provider,
@@ -1310,49 +1307,38 @@ impl_identity_task!(
             callback,
             format!("start process application message, group {}", this.group_id),
         );
-        let result = this
-            .provider
-            .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, &this.group_id).map_err(|e| {
-                    emit_debug_log_async(
-                        callback,
-                        format!(
-                            "process application message - load group error, group {}: {}",
-                            this.group_id, e
-                        ),
-                    );
-                    e
-                })?;
-                emit_debug_log_async(
-                    callback,
-                    format!(
-                        "process application message - load group done, group {}",
-                        this.group_id
-                    ),
-                );
-
-                core::process_application_message(&mut mls_group, tx_provider, &this.message)
-                    .map_err(|e| {
-                        emit_debug_log_async(
-                            callback,
-                            format!(
-                                "process application message error, group {}: {}",
-                                this.group_id, e
-                            ),
-                        );
-                        e
-                    })
-            })
+        let mut mls_group = core::group(&this.provider, &this.group_id, [this.message.as_slice()])
             .map_err(|e| {
                 emit_debug_log_async(
                     callback,
                     format!(
-                        "process application message error, group {}: {}",
+                        "process application message - load group error, group {}: {}",
                         this.group_id, e
                     ),
                 );
                 napi::Error::new(napi::Status::GenericFailure, e.to_string())
             })?;
+
+        emit_debug_log_async(
+            callback,
+            format!(
+                "process application message - load group done, group {}",
+                this.group_id
+            ),
+        );
+
+        let result =
+            core::process_application_message(&mut mls_group, &this.provider, &this.message)
+                .map_err(|e| {
+                    emit_debug_log_async(
+                        callback,
+                        format!(
+                            "process application message error, group {}: {}",
+                            this.group_id, e
+                        ),
+                    );
+                    napi::Error::new(napi::Status::GenericFailure, e.to_string())
+                })?;
         emit_debug_log_async(
             callback,
             format!("end process application message, group {}", this.group_id),
@@ -1375,50 +1361,39 @@ impl_identity_task!(ProcessProposalMessageTask, QueuedProposal, |this| {
         callback,
         format!("start process proposal message, group {}", this.group_id),
     );
-    let queued_proposal = this
-        .provider
-        .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id).map_err(|e| {
-                emit_debug_log_async(
-                    callback,
-                    format!(
-                        "process proposal message - load group error, group {}: {}",
-                        this.group_id, e
-                    ),
-                );
-                e
-            })?;
-            emit_debug_log_async(
-                callback,
-                format!(
-                    "process proposal message - load group done, group {}",
-                    this.group_id
-                ),
-            );
-
-            core::process_proposal_message(&mut mls_group, tx_provider, &this.message).map_err(
-                |e| {
-                    emit_debug_log_async(
-                        callback,
-                        format!(
-                            "process proposal message error, group {}: {}",
-                            this.group_id, e
-                        ),
-                    );
-                    e
-                },
-            )
-        })
+    let mut mls_group = core::group(&this.provider, &this.group_id, [this.message.as_slice()])
         .map_err(|e| {
             emit_debug_log_async(
                 callback,
                 format!(
-                    "process proposal message error, group {}: {}",
+                    "process proposal message - load group error, group {}: {}",
                     this.group_id, e
                 ),
             );
             napi::Error::new(napi::Status::GenericFailure, e.to_string())
         })?;
+
+    emit_debug_log_async(
+        callback,
+        format!(
+            "process proposal message - load group done, group {}",
+            this.group_id
+        ),
+    );
+
+    let queued_proposal =
+        core::process_proposal_message(&mut mls_group, &this.provider, &this.message).map_err(
+            |e| {
+                emit_debug_log_async(
+                    callback,
+                    format!(
+                        "process proposal message error, group {}: {}",
+                        this.group_id, e
+                    ),
+                );
+                napi::Error::new(napi::Status::GenericFailure, e.to_string())
+            },
+        )?;
     emit_debug_log_async(
         callback,
         format!("end process proposal message, group {}", this.group_id),
@@ -1589,53 +1564,42 @@ impl_identity_task!(LeaveGroupTask, LeaveGroupResult, |this| {
         callback,
         format!("start leave group, group {}", this.group_id),
     );
-    let result = this
-        .provider
-        .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id).map_err(|e| {
-                emit_debug_log_async(
-                    callback,
-                    format!(
-                        "leave group - load group error, group {}: {}",
-                        this.group_id, e
-                    ),
-                );
-                e
-            })?;
-            emit_debug_log_async(
-                callback,
-                format!("leave group - load group done, group {}", this.group_id),
-            );
-            let signer = core::group_signer(&mls_group, tx_provider).map_err(|e| {
-                emit_debug_log_async(
-                    callback,
-                    format!(
-                        "leave group - get signer error, group {}: {}",
-                        this.group_id, e
-                    ),
-                );
-                e
-            })?;
-            emit_debug_log_async(
-                callback,
-                format!("leave group - get signer done, group {}", this.group_id),
-            );
+    let mut mls_group = core::group(&this.provider, &this.group_id, []).map_err(|e| {
+        emit_debug_log_async(
+            callback,
+            format!(
+                "leave group - load group error, group {}: {}",
+                this.group_id, e
+            ),
+        );
+        napi::Error::new(napi::Status::GenericFailure, e.to_string())
+    })?;
+    emit_debug_log_async(
+        callback,
+        format!("leave group - load group done, group {}", this.group_id),
+    );
+    let signer = core::group_signer(&mls_group, &this.provider).map_err(|e| {
+        emit_debug_log_async(
+            callback,
+            format!(
+                "leave group - get signer error, group {}: {}",
+                this.group_id, e
+            ),
+        );
+        napi::Error::new(napi::Status::GenericFailure, e.to_string())
+    })?;
+    emit_debug_log_async(
+        callback,
+        format!("leave group - get signer done, group {}", this.group_id),
+    );
 
-            core::leave_group(&mut mls_group, tx_provider, &signer).map_err(|e| {
-                emit_debug_log_async(
-                    callback,
-                    format!("leave group error, group {}: {}", this.group_id, e),
-                );
-                e
-            })
-        })
-        .map_err(|e| {
-            emit_debug_log_async(
-                callback,
-                format!("leave group error, group {}: {}", this.group_id, e),
-            );
-            napi::Error::new(napi::Status::GenericFailure, e.to_string())
-        })?;
+    let result = core::leave_group(&mut mls_group, &this.provider, &signer).map_err(|e| {
+        emit_debug_log_async(
+            callback,
+            format!("leave group error, group {}: {}", this.group_id, e),
+        );
+        napi::Error::new(napi::Status::GenericFailure, e.to_string())
+    })?;
     emit_debug_log_async(
         callback,
         format!("end leave group, group {}", this.group_id),
@@ -1693,7 +1657,7 @@ pub struct ExportGroupInfoTask {
 }
 
 impl_identity_task!(ExportGroupInfoTask, Vec<u8>, |this| {
-    let mls_group = core::group(&this.provider, &this.group_id)
+    let mls_group = core::group(&this.provider, &this.group_id, [])
         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
     let signer = core::group_signer(&mls_group, &this.provider)
         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
@@ -1712,7 +1676,7 @@ impl_identity_task!(UpdateLeafNodeTask, UpdateLeafNodeResult, |this| {
     let result = this
         .provider
         .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id)?;
+            let mut mls_group = core::group(tx_provider, &this.group_id, [])?;
             let signer = core::group_signer(&mls_group, tx_provider)?;
             core::update_leaf_node(&mut mls_group, tx_provider, &signer)
         })
@@ -1743,7 +1707,7 @@ impl_identity_task!(ReaddTask, ReAddResult, |this| {
     let result = this
         .provider
         .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id)?;
+            let mut mls_group = core::group(tx_provider, &this.group_id, [])?;
             let signer = core::group_signer(&mls_group, tx_provider)?;
             core::readd(
                 &mut mls_group,
@@ -1794,7 +1758,7 @@ pub struct ClearPendingProposalsTask {
 impl_identity_task!(ClearPendingProposalsTask, (), |this| {
     this.provider
         .transaction(|tx_provider| {
-            let mut mls_group = core::group(tx_provider, &this.group_id)?;
+            let mut mls_group = core::group(tx_provider, &this.group_id, [])?;
             core::clear_pending_proposals(&mut mls_group, tx_provider)
         })
         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
@@ -1808,7 +1772,7 @@ pub struct PendingCommitTask {
 }
 
 impl_identity_task!(PendingCommitTask, Option<PendingCommitResult>, |this| {
-    let mls_group = core::group(&this.provider, &this.group_id)
+    let mls_group = core::group(&this.provider, &this.group_id, [])
         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
     Ok(core::pending_commit(&mls_group).map(|commit| commit.into()))
 });
@@ -1819,7 +1783,7 @@ pub struct PendingProposalsTask {
 }
 
 impl_identity_task!(PendingProposalsTask, PendingProposalsResult, |this| {
-    let mls_group = core::group(&this.provider, &this.group_id)
+    let mls_group = core::group(&this.provider, &this.group_id, [])
         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
     Ok(core::pending_proposals(&mls_group).into())
 });
@@ -1830,7 +1794,7 @@ pub struct MembersTask {
 }
 
 impl_identity_task!(MembersTask, Vec<String>, |this| {
-    let mls_group = core::group(&this.provider, &this.group_id)
+    let mls_group = core::group(&this.provider, &this.group_id, [])
         .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
 
     let members = mls_group

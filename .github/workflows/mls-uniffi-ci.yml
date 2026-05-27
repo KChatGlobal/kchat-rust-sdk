@@ -1,0 +1,58 @@
+name: Rust MLS Uniffi CI Pipeline
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/KCHAT-config-mls-uniffi-cd
+
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+  build-android:
+    name: Build and publish Android
+    if: true
+    uses: KChatGlobal/jenkins-shared-library/.github/workflows/sdk-android-ci.yml@feature/CI-1448
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+    with:
+      commit_id: ${{ github.sha }}
+      runner_label: "k8s"
+      android_ndk_version: "r26d"
+      kotlin_bindgen_bin_folder: "uniffi-bindgen"
+      project: "crates/kchat-mls-uniffi"
+      rust_tool_chain: "stable"
+      rust_tool_chain_target: aarch64-linux-android, x86_64-linux-android
+      android_abi: '["arm64-v8a", "x86_64"]'
+      # android_studio_template_repo: "KChatGlobal/sdk-android-template"
+      # package_name: "com.kchat.mls"
+      # repository_key: "sdk-uq-local"
+      # artifact_id: "kchat-mls-uniffi"
+      # artifact_version: ${{ needs.prepare-release.outputs.version }}
+
+  build-ios:
+    name: Build and sync Apple
+    if: true
+    # needs: prepare-release
+    uses: KChatGlobal/jenkins-shared-library/.github/workflows/sdk-apple-ci.yml@feature/CI-1448
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+    with:
+      commit_id: ${{ github.sha }}
+      runner_label: "ARM64"
+      project: "crates/kchat-mls-uniffi"
+      package_name: "ios"
+      platform: "ios"
+      # target_repo: "KChatGlobal/<kchat-mls-apple-sdk-repo>"
+      # target_branch: "develop"
+      # version_tag: ${{ github.ref_name }}
+      # version_title: "KChat MLS Apple SDK ${{ github.ref_name }}"
+      # auto_approve: true

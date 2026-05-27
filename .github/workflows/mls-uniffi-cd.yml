@@ -12,91 +12,60 @@ permissions:
   pull-requests: write
 
 jobs:
-  build-android:
-    name: Build Android
-    runs-on: ubuntu-latest
-
+  prepare-release:
+    name: Prepare release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: k8s
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Extract version
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: armv7-linux-androideabi, aarch64-linux-android, x86_64-linux-android, i686-linux-android
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r26d
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk@0.9.0
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-android-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-android-
-
-      - name: Build Android
-        working-directory: crates/kchat-mls-uniffi
-        run: bash ../../scripts/mls_uniffi_build_android.sh
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-build
-          path: android/
-          retention-days: 30
-          if-no-files-found: error
+  build-android:
+    name: Build and publish Android
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: prepare-release
+    uses: KChatGlobal/jenkins-shared-library/.github/workflows/sdk-android-cd.yml@develop
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+    with:
+      commit_id: ${{ github.sha }}
+      runner_label: "k8s"
+      android_ndk_version: "r26d"
+      kotlin_bindgen_bin_folder: "uniffi-bindgen"
+      project: "kchat-mls-uniffi"
+      rust_tool_chain: "stable"
+      rust_tool_chain_target: aarch64-linux-android, x86_64-linux-android
+      android_abi: '["arm64-v8a", "x86_64"]'
+      android_studio_template_repo: "KChatGlobal/sdk-android-template"
+      package_name: "com.kchat.mls"
+      repository_key: "sdk-uq-local"
+      artifact_id: "kchat-mls-uniffi"
+      artifact_version: ${{ needs.prepare-release.outputs.version }}
 
   build-ios:
-    name: Build iOS
-    runs-on: macos-latest
-    env:
-      IPHONEOS_DEPLOYMENT_TARGET: "15.0"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios, aarch64-apple-ios-sim, x86_64-apple-ios
-
-      - name: Install cargo-swift
-        run: cargo install cargo-swift
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-ios-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-ios-
-
-      - name: Build iOS
-        working-directory: crates/kchat-mls-uniffi
-        run: cargo swift package -y -p ios --release -n ios
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-build
-          path: crates/kchat-mls-uniffi/ios/
-          retention-days: 30
-          if-no-files-found: error
+    name: Build and sync Apple
+    if: false
+    needs: prepare-release
+    uses: KChatGlobal/jenkins-shared-library/.github/workflows/sdk-apple-cd.yml@develop
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+    with:
+      commit_id: ${{ github.sha }}
+      runner_label: "macos-latest"
+      project: "kchat-mls-uniffi"
+      package_name: "ios"
+      platform: "ios"
+      target_repo: "KChatGlobal/<kchat-mls-apple-sdk-repo>"
+      target_branch: "develop"
+      version_tag: ${{ github.ref_name }}
+      version_title: "KChat MLS Apple SDK ${{ github.ref_name }}"
+      auto_approve: true

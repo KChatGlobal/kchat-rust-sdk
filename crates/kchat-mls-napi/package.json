@@ -1,7 +1,18 @@
 {
   "name": "@kchat/mls-napi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Node.js bindings for KChat MLS SDK using NAPI-RS",
+  "license": "MIT OR Apache-2.0",
+  "author": "KChat Authors",
+  "homepage": "https://kchat.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KChatGlobal/kchat-rust-sdk.git",
+    "directory": "crates/kchat-mls-napi"
+  },
+  "bugs": {
+    "url": "https://github.com/KChatGlobal/kchat-rust-sdk/issues"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {

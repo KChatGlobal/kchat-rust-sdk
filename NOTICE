@@ -1,0 +1,8 @@
+KChat Rust SDK
+Copyright (c) 2025 KChat.com
+
+This product includes software developed by KChat.com and contributors.
+
+This product builds on top of OpenMLS (https://github.com/openmls/openmls),
+which is licensed under the MIT License. See the OpenMLS repository for its
+copyright notices and license.

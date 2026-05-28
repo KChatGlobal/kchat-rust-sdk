@@ -1,8 +1,12 @@
 [package]
 name = "uq-openmls"
-version = "0.2.0"
-edition = "2024"
-authors = ["KChat Authors"]
+description = "Thin OpenMLS wrapper exposing the MLS primitives used by the KChat SDK."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 openmls = { workspace = true, features = ["fork-resolution"] }

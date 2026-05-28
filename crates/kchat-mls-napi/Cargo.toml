@@ -1,9 +1,13 @@
 
 [package]
 name = "kchat_mls_napi"
-version = "0.2.0"
-edition = "2024"
-authors = ["KChat Authors"]
+description = "Node.js (NAPI-RS) bindings for the KChat MLS SDK."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [lib]
 crate-type = ["cdylib"]

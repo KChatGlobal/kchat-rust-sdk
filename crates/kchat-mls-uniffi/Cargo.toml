@@ -1,7 +1,12 @@
 [package]
 name = "kchat-mls-uniffi"
-version = "0.2.0"
-edition = "2024"
+description = "UniFFI bindings exposing the KChat MLS SDK to Swift and Kotlin."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [lib]
 crate-type = ["staticlib", "lib", "cdylib"]

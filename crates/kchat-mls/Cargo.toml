@@ -1,8 +1,12 @@
 [package]
 name = "kchat-mls"
-version = "0.2.0"
-edition = "2024"
-authors = ["KChat Authors"]
+description = "High-level KChat MLS group lifecycle and message processing on top of OpenMLS."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 openmls = { workspace = true, features = ["test-utils"] }

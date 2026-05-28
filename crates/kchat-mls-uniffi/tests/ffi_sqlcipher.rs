@@ -99,6 +99,7 @@ fn open(paths: &PathSet, client_id: &str, password: Option<&str>) -> Result<UqMl
         password.map(|p| p.to_owned()),
         OUT_OF_ORDER_TOLERANCE,
         MAXIMUM_FORWARD_DISTANCE,
+        None,
     )
     .map_err(|e| e.to_string())
 }
@@ -113,7 +114,12 @@ fn sqlcipher_encrypted_db_round_trips_with_same_password() {
     let password = "correct-horse-battery-staple";
 
     // First open: creates the encrypted database and runs migrations.
-    let client = open_expect(&paths, "alice", Some(password), "initial open with password");
+    let client = open_expect(
+        &paths,
+        "alice",
+        Some(password),
+        "initial open with password",
+    );
 
     // Perform a write so we know the encrypted DB has real MLS content,
     // not just empty migration tables.
@@ -161,11 +167,7 @@ fn sqlcipher_db_file_is_not_plain_sqlite() {
 
     // Log the encrypted bytes so they can be verified by eye.
     // Run with: `cargo test -p kchat-mls-uniffi --test ffi_sqlcipher -- --nocapture`
-    dump_file_head(
-        "ENCRYPTED DB (password set)",
-        &paths.storage_path,
-        256,
-    );
+    dump_file_head("ENCRYPTED DB (password set)", &paths.storage_path, 256);
 
     assert_ne!(
         &bytes[..PLAIN_SQLITE_MAGIC.len()],
@@ -195,11 +197,7 @@ fn sqlcipher_plain_db_starts_with_sqlite_magic_header() {
     );
 
     // Log the plain bytes for visual comparison against the encrypted dump above.
-    dump_file_head(
-        "PLAIN DB (no password)",
-        &paths.storage_path,
-        256,
-    );
+    dump_file_head("PLAIN DB (no password)", &paths.storage_path, 256);
 
     assert_eq!(
         &bytes[..PLAIN_SQLITE_MAGIC.len()],

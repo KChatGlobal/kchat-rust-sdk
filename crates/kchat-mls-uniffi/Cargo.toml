@@ -26,8 +26,6 @@ openmls_rust_crypto = { workspace = true }
 
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["full"] }
-tracing = "0.1.40"
-tracing-subscriber = "0.3"
 uniffi = { version = "0.31", features = ["cli", "tokio"] }
 uq-openmls = { path = "../uq-openmls" }
 kchat-mls = {path = "../kchat-mls" }

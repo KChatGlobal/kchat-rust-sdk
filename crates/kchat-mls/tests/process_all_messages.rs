@@ -138,7 +138,8 @@ fn test_process_all_messages_commits_success() {
     let receiver_provider =
         SqliteProvider::new(&receiver_db_str, &None).expect("should create receiver provider");
     let group_status_conn =
-        open_group_status_connection(&status_db_str).expect("should open group status connection");
+        open_group_status_connection(&status_db_str, &None)
+            .expect("should open group status connection");
 
     bootstrap_group(
         &sender_provider,
@@ -220,7 +221,8 @@ fn test_process_all_messages_invalid_commit_keeps_prior_progress() {
     let receiver_provider =
         SqliteProvider::new(&receiver_db_str, &None).expect("should create receiver provider");
     let group_status_conn =
-        open_group_status_connection(&status_db_str).expect("should open group status connection");
+        open_group_status_connection(&status_db_str, &None)
+            .expect("should open group status connection");
 
     bootstrap_group(
         &sender_provider,
@@ -304,7 +306,8 @@ fn test_process_all_messages_non_fatal_commit_error_keeps_processing() {
     let receiver_provider =
         SqliteProvider::new(&receiver_db_str, &None).expect("should create receiver provider");
     let group_status_conn =
-        open_group_status_connection(&status_db_str).expect("should open group status connection");
+        open_group_status_connection(&status_db_str, &None)
+            .expect("should open group status connection");
 
     bootstrap_group(
         &sender_provider,
@@ -384,7 +387,8 @@ fn test_process_all_messages_empty_message_batch() {
     let receiver_provider =
         SqliteProvider::new(&receiver_db_str, &None).expect("should create receiver provider");
     let group_status_conn =
-        open_group_status_connection(&status_db_str).expect("should open group status connection");
+        open_group_status_connection(&status_db_str, &None)
+            .expect("should open group status connection");
 
     bootstrap_group(
         &sender_provider,

@@ -457,7 +457,7 @@ impl UqMls {
             move |msg: String| cb.on_trigger(msg)
         });
         let secret = password.map(SecretString::from);
-        let conn = open_group_status_connection(&group_storage_path)?;
+        let conn = open_group_status_connection(&group_storage_path, &secret)?;
 
         Ok(UqMls {
             client_id,

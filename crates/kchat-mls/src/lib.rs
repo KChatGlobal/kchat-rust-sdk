@@ -11,6 +11,7 @@ use openmls::{
 };
 use openmls_traits::OpenMlsProvider;
 use rusqlite::{Connection, params};
+use secrecy::{ExposeSecret, SecretString};
 use uq_openmls::{
     core::{
         Proposal, clear_pending_commit, delete_group, group, group_with_epoch_message_secrets,
@@ -24,18 +25,35 @@ pub type GroupStatusConnection = SqliteConnectionPool;
 
 const GROUP_STATUS_CONNECTION_POOL_SIZE: usize = 8;
 const GROUP_STATUS_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const GROUP_STATUS_PRAGMA_NAME_KEY: &str = "key";
+const GROUP_STATUS_PRAGMA_NAME_JOURNAL_MODE: &str = "journal_mode";
+const GROUP_STATUS_JOURNAL_MODE_WAL: &str = "WAL";
 
-fn configure_group_status_connection(connection: &Connection) -> Result<(), rusqlite::Error> {
-    connection.pragma_update(None, "journal_mode", "WAL")?;
+fn configure_group_status_connection(
+    connection: &Connection,
+    secret: &Option<SecretString>,
+) -> Result<(), rusqlite::Error> {
+    if let Some(secret) = secret {
+        connection.pragma_update(None, GROUP_STATUS_PRAGMA_NAME_KEY, secret.expose_secret())?;
+    }
+    connection.pragma_update(
+        None,
+        GROUP_STATUS_PRAGMA_NAME_JOURNAL_MODE,
+        GROUP_STATUS_JOURNAL_MODE_WAL,
+    )?;
     connection.busy_timeout(GROUP_STATUS_BUSY_TIMEOUT)?;
     Ok(())
 }
 
-pub fn open_group_status_connection(path: &str) -> Result<GroupStatusConnection, Error> {
+pub fn open_group_status_connection(
+    path: &str,
+    secret: &Option<SecretString>,
+) -> Result<GroupStatusConnection, Error> {
     let path = path.to_owned();
+    let secret = secret.clone();
     let conn = SqliteConnectionPool::new(GROUP_STATUS_CONNECTION_POOL_SIZE, move || {
         let connection = Connection::open(&path)?;
-        configure_group_status_connection(&connection)?;
+        configure_group_status_connection(&connection, &secret)?;
         Ok(connection)
     });
     initialize(&conn)?;
@@ -75,6 +93,7 @@ pub enum MessageType {
     Welcome,
     Commit,
     Proposal,
+    Unknown,
 }
 
 impl From<&str> for MessageType {
@@ -83,7 +102,7 @@ impl From<&str> for MessageType {
             "MLS_MESSAGE_TYPE_WELCOME" => Self::Welcome,
             "MLS_MESSAGE_TYPE_COMMIT" => Self::Commit,
             "MLS_MESSAGE_TYPE_PROPOSAL" => Self::Proposal,
-            _ => panic!("invalid message type"),
+            _ => Self::Unknown,
         }
     }
 }
@@ -444,7 +463,9 @@ pub fn process_all_messages(
                     let _ =
                         insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
                 }
-                GroupPendingOperation::LeaveGroup => {}
+                GroupPendingOperation::LeaveGroup => {
+                    // NOTE: we don't handle leave group in this operation
+                }
                 GroupPendingOperation::None => (),
             }
         }
@@ -696,6 +717,11 @@ pub fn process_all_messages(
                             });
                         }
                     }
+                }
+                MessageType::Unknown => {
+                    emit_log(log, || {
+                        format!("unknown message type {:?}", msg.message_type)
+                    });
                 }
             }
         }

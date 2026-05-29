@@ -1941,7 +1941,7 @@ impl UqMls {
         maximum_forward_distance: u32,
     ) -> napi::Result<Self> {
         let secret = password.map(SecretString::from);
-        let conn = open_group_status_connection(&group_storage_path)
+        let conn = open_group_status_connection(&group_storage_path, &secret)
             .map_err(|e| Error::Storage(e.to_string()))?;
 
         Ok(Self {

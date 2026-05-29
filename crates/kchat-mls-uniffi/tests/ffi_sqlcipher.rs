@@ -177,6 +177,94 @@ fn sqlcipher_db_file_is_not_plain_sqlite() {
 }
 
 #[test]
+fn sqlcipher_group_status_db_file_is_not_plain_sqlite() {
+    let paths = make_paths("sqlcipher_group_status_header", "alice");
+    let password = "group-status-encryption";
+
+    let client = open_expect(&paths, "alice", Some(password), "open with password");
+    // Touch the group-status DB by creating a group, which writes a row into it.
+    client
+        .create_group("sqlcipher-group-status", None)
+        .expect("create_group should succeed on encrypted group-status DB");
+    drop(client);
+
+    let bytes =
+        fs::read(&paths.group_storage_path).expect("encrypted group-status DB should exist");
+    assert!(
+        bytes.len() >= PLAIN_SQLITE_MAGIC.len(),
+        "encrypted group-status DB file should be non-empty"
+    );
+
+    dump_file_head(
+        "ENCRYPTED GROUP-STATUS DB (password set)",
+        &paths.group_storage_path,
+        256,
+    );
+
+    assert_ne!(
+        &bytes[..PLAIN_SQLITE_MAGIC.len()],
+        PLAIN_SQLITE_MAGIC,
+        "group-status DB opened with a password must not start with the plain-text SQLite magic header"
+    );
+}
+
+#[test]
+fn sqlcipher_group_status_db_plain_starts_with_sqlite_magic_header() {
+    // Guard against accidentally encrypting the group-status DB when the
+    // caller did not supply a password.
+    let paths = make_paths("sqlcipher_group_status_plain_header", "alice");
+
+    let client = open_expect(&paths, "alice", None, "open without password");
+    client
+        .create_group("sqlcipher-group-status-plain", None)
+        .expect("create_group should succeed without password");
+    drop(client);
+
+    let bytes = fs::read(&paths.group_storage_path).expect("plain group-status DB should exist");
+    assert!(
+        bytes.len() >= PLAIN_SQLITE_MAGIC.len(),
+        "plain group-status DB file should be non-empty"
+    );
+
+    dump_file_head(
+        "PLAIN GROUP-STATUS DB (no password)",
+        &paths.group_storage_path,
+        256,
+    );
+
+    assert_eq!(
+        &bytes[..PLAIN_SQLITE_MAGIC.len()],
+        PLAIN_SQLITE_MAGIC,
+        "group-status DB opened without a password must be a standard SQLite database"
+    );
+}
+
+#[test]
+fn sqlcipher_group_status_db_wrong_password_fails_to_open() {
+    let paths = make_paths("sqlcipher_group_status_wrong_password", "alice");
+
+    let client = open_expect(
+        &paths,
+        "alice",
+        Some("right-password"),
+        "initial open with password",
+    );
+    // Force a write into the group-status DB so it is not empty when reopened.
+    client
+        .create_group("sqlcipher-group-status-wrong-pw", None)
+        .expect("create_group should succeed");
+    drop(client);
+
+    let err = open(&paths, "alice", Some("wrong-password"))
+        .err()
+        .expect("opening encrypted group-status DB with the wrong password must fail");
+    assert!(
+        !err.is_empty(),
+        "wrong-password error should carry a message, got: {err}"
+    );
+}
+
+#[test]
 fn sqlcipher_plain_db_starts_with_sqlite_magic_header() {
     // Sanity check: without a password the file is a regular SQLite database
     // and starts with the well-known magic header. This guards against a

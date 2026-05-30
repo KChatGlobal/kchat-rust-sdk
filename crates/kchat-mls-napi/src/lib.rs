@@ -11,7 +11,7 @@ use kchat_mls::{
 };
 use napi::{
     Task,
-    bindgen_prelude::{AsyncTask, FnArgs, Function},
+    bindgen_prelude::{AsyncTask, BigInt, FnArgs, Function},
     threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode},
 };
 use napi_derive::napi;
@@ -116,7 +116,7 @@ pub struct AddMembersResult {
     pub commit: Vec<u8>,
     pub welcome: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
-    pub current_epoch: i64,
+    pub current_epoch: BigInt,
     pub pre_tree_hash: Vec<u8>,
 }
 
@@ -126,7 +126,7 @@ impl From<core::AddMembersResult> for AddMembersResult {
             commit: value.commit,
             welcome: value.welcome,
             group_info: value.group_info,
-            current_epoch: value.current_epoch as i64,
+            current_epoch: BigInt::from(value.current_epoch),
             pre_tree_hash: value.pre_tree_hash,
         }
     }
@@ -136,7 +136,7 @@ impl From<core::AddMembersResult> for AddMembersResult {
 pub struct RemoveMembersResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
-    pub current_epoch: i64,
+    pub current_epoch: BigInt,
     pub pre_tree_hash: Vec<u8>,
 }
 
@@ -145,7 +145,7 @@ impl From<core::RemoveMembersResult> for RemoveMembersResult {
         Self {
             commit: value.commit,
             group_info: value.group_info,
-            current_epoch: value.current_epoch as i64,
+            current_epoch: BigInt::from(value.current_epoch),
             pre_tree_hash: value.pre_tree_hash,
         }
     }
@@ -170,7 +170,7 @@ pub struct QueuedProposal {
     pub client_jid: Option<String>,
     pub mls_client_id: Option<String>,
     pub mls_fingerprint: Option<String>,
-    pub epoch: Option<i64>,
+    pub epoch: Option<BigInt>,
     pub group_id: String,
     pub proposal: Proposal,
 }
@@ -184,7 +184,7 @@ impl From<core::QueuedProposal> for QueuedProposal {
             client_jid: extract_jid_from_member_id(&value.sender),
             mls_client_id: Some(value.sender),
             mls_fingerprint: None,
-            epoch: Some(value.epoch as i64),
+            epoch: Some(BigInt::from(value.epoch)),
         }
     }
 }
@@ -206,13 +206,13 @@ impl From<core::ProcessOperationMessageResult> for ProcessOperationMessageResult
 
 #[napi(object)]
 pub struct ProcessManyOperationMessagesResult {
-    pub current_epoch: i64,
+    pub current_epoch: BigInt,
 }
 
 impl From<core::ProcessManyOperationMessagesResult> for ProcessManyOperationMessagesResult {
     fn from(value: core::ProcessManyOperationMessagesResult) -> Self {
         Self {
-            current_epoch: value.current_epoch as i64,
+            current_epoch: BigInt::from(value.current_epoch),
         }
     }
 }
@@ -221,7 +221,7 @@ impl From<core::ProcessManyOperationMessagesResult> for ProcessManyOperationMess
 pub struct JoinByExternalCommitResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
-    pub current_epoch: i64,
+    pub current_epoch: BigInt,
     pub pre_tree_hash: Vec<u8>,
 }
 
@@ -230,7 +230,7 @@ impl From<core::JoinByExternalCommitResult> for JoinByExternalCommitResult {
         Self {
             commit: value.commit,
             group_info: value.group_info,
-            current_epoch: value.current_epoch as i64,
+            current_epoch: BigInt::from(value.current_epoch),
             pre_tree_hash: value.pre_tree_hash,
         }
     }
@@ -266,7 +266,7 @@ impl From<core::LeaveGroupResult> for LeaveGroupResult {
 pub struct UpdateLeafNodeResult {
     pub commit: Vec<u8>,
     pub group_info: Option<Vec<u8>>,
-    pub current_epoch: i64,
+    pub current_epoch: BigInt,
     pub pre_tree_hash: Vec<u8>,
 }
 
@@ -275,7 +275,7 @@ impl From<core::UpdateLeafNodeResult> for UpdateLeafNodeResult {
         Self {
             commit: value.commit,
             group_info: value.group_info,
-            current_epoch: value.current_epoch as i64,
+            current_epoch: BigInt::from(value.current_epoch),
             pre_tree_hash: value.pre_tree_hash,
         }
     }
@@ -359,7 +359,7 @@ impl From<core::PendingProposalsResult> for PendingProposalsResult {
 #[napi(object)]
 pub struct WrappedGroupEpochResult {
     pub group_id: String,
-    pub epoch: i64,
+    pub epoch: BigInt,
     pub tree_hash: Vec<u8>,
     pub err: Option<String>,
     pub pending_operation: Option<String>,
@@ -368,8 +368,8 @@ pub struct WrappedGroupEpochResult {
 #[napi(object)]
 pub struct WrappedGroupContextResult {
     pub group_id: String,
-    pub current_epoch: i64,
-    pub pending_epoch: i64,
+    pub current_epoch: BigInt,
+    pub pending_epoch: BigInt,
     pub tree_hash: Vec<u8>,
     pub err: Option<String>,
     pub pending_operation: Option<String>,
@@ -384,16 +384,16 @@ pub struct ProcessAllMessagesArgs {
 pub struct AllMessagesOfGroupArgs {
     pub group_id: String,
     pub messages: Vec<MlsMessage>,
-    pub current_epoch: i64,
+    pub current_epoch: BigInt,
     pub current_tree_hash: Vec<u8>,
-    pub pending_epoch: i64,
+    pub pending_epoch: BigInt,
     pub pending_tree_hash: Vec<u8>,
 }
 
 #[napi(object)]
 pub struct MlsMessage {
     pub blob: Vec<u8>,
-    pub epoch: i64,
+    pub epoch: BigInt,
     pub sender: String,
     pub message_type: String,
 }
@@ -445,32 +445,59 @@ pub struct ProcessAllMessagesResult {
     pub deleted_groups: Vec<String>,
 }
 
+fn bigint_to_u64(value: BigInt, field: &str) -> napi::Result<u64> {
+    let (signed, parsed, lossless) = value.get_u64();
+    if signed || !lossless {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{field} must be an unsigned 64-bit integer"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn bigint_to_i64(value: BigInt, field: &str) -> napi::Result<i64> {
+    let (parsed, lossless) = value.get_i64();
+    if !lossless {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{field} must be a signed 64-bit integer"),
+        ));
+    }
+    Ok(parsed)
+}
+
 fn build_process_all_messages_args(
     args: ProcessAllMessagesArgs,
-) -> kchat_mls::ProcessAllMessagesArgs {
-    kchat_mls::ProcessAllMessagesArgs {
-        group_messages: args
-            .group_messages
-            .into_iter()
-            .map(|msg| kchat_mls::AllMessagesOfGroupArgs {
-                group_id: msg.group_id,
-                messages: msg
-                    .messages
-                    .into_iter()
-                    .map(|msg| kchat_mls::MlsMessage {
+) -> napi::Result<kchat_mls::ProcessAllMessagesArgs> {
+    let group_messages = args
+        .group_messages
+        .into_iter()
+        .map(|msg| {
+            let messages = msg
+                .messages
+                .into_iter()
+                .map(|msg| {
+                    Ok(kchat_mls::MlsMessage {
                         blob: msg.blob,
-                        epoch: msg.epoch as u64,
+                        epoch: bigint_to_u64(msg.epoch, "MlsMessage.epoch")?,
                         sender: msg.sender,
                         message_type: msg.message_type.as_str().into(),
                     })
-                    .collect(),
-                current_epoch: msg.current_epoch,
+                })
+                .collect::<napi::Result<Vec<_>>>()?;
+            Ok(kchat_mls::AllMessagesOfGroupArgs {
+                group_id: msg.group_id,
+                messages,
+                current_epoch: bigint_to_i64(msg.current_epoch, "AllMessagesOfGroupArgs.current_epoch")?,
                 current_tree_hash: msg.current_tree_hash,
-                pending_epoch: msg.pending_epoch,
+                pending_epoch: bigint_to_i64(msg.pending_epoch, "AllMessagesOfGroupArgs.pending_epoch")?,
                 pending_tree_hash: msg.pending_tree_hash,
             })
-            .collect(),
-    }
+        })
+        .collect::<napi::Result<Vec<_>>>()?;
+
+    Ok(kchat_mls::ProcessAllMessagesArgs { group_messages })
 }
 
 fn convert_process_all_messages_result(
@@ -717,9 +744,9 @@ impl_identity_task!(GroupEpochTask, WrappedGroupEpochResult, |this| {
         Ok(context) => WrappedGroupEpochResult {
             group_id: this.group_id.clone(),
             epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
-                context.epoch().as_u64() as i64 - 1
+                BigInt::from(context.epoch().as_u64() as i64 - 1)
             } else {
-                context.epoch().as_u64() as i64
+                BigInt::from(context.epoch().as_u64())
             },
             tree_hash: context.tree_hash().to_vec(),
             err: None,
@@ -732,7 +759,7 @@ impl_identity_task!(GroupEpochTask, WrappedGroupEpochResult, |this| {
             );
             WrappedGroupEpochResult {
                 group_id: this.group_id.clone(),
-                epoch: -1,
+                epoch: BigInt::from(-1i64),
                 tree_hash: Vec::new(),
                 err: Some(err.to_string()),
                 pending_operation: None,
@@ -783,7 +810,7 @@ impl_identity_task!(GroupEpochsTask, Vec<WrappedGroupEpochResult>, |this| {
 
                     WrappedGroupEpochResult {
                         group_id: group_id.clone(),
-                        epoch,
+                        epoch: BigInt::from(epoch),
                         tree_hash: context.tree_hash().to_vec(),
                         err: None,
                         pending_operation,
@@ -796,7 +823,7 @@ impl_identity_task!(GroupEpochsTask, Vec<WrappedGroupEpochResult>, |this| {
                     );
                     WrappedGroupEpochResult {
                         group_id: group_id.clone(),
-                        epoch: -1,
+                        epoch: BigInt::from(-1i64),
                         tree_hash: Vec::new(),
                         err: Some(err.to_string()),
                         pending_operation: None,
@@ -828,11 +855,11 @@ impl_identity_task!(GroupContextTask, WrappedGroupContextResult, |this| {
     let result = match core::group_context(&this.provider, &this.group_id) {
         Ok(context) => WrappedGroupContextResult {
             group_id: this.group_id.clone(),
-            current_epoch: context.epoch().as_u64() as i64,
+            current_epoch: BigInt::from(context.epoch().as_u64()),
             pending_epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
-                context.epoch().as_u64() as i64 - 1
+                BigInt::from(context.epoch().as_u64() as i64 - 1)
             } else {
-                context.epoch().as_u64() as i64
+                BigInt::from(context.epoch().as_u64())
             },
             tree_hash: context.tree_hash().to_vec(),
             err: None,
@@ -845,8 +872,8 @@ impl_identity_task!(GroupContextTask, WrappedGroupContextResult, |this| {
             );
             WrappedGroupContextResult {
                 group_id: this.group_id.clone(),
-                current_epoch: -1,
-                pending_epoch: -1,
+                current_epoch: BigInt::from(-1i64),
+                pending_epoch: BigInt::from(-1i64),
                 tree_hash: Vec::new(),
                 err: Some(err.to_string()),
                 pending_operation: None,
@@ -899,8 +926,8 @@ impl_identity_task!(GroupContextsTask, Vec<WrappedGroupContextResult>, |this| {
 
                     WrappedGroupContextResult {
                         group_id: group_id.clone(),
-                        current_epoch,
-                        pending_epoch,
+                        current_epoch: BigInt::from(current_epoch),
+                        pending_epoch: BigInt::from(pending_epoch),
                         tree_hash: context.tree_hash().to_vec(),
                         err: None,
                         pending_operation,
@@ -913,8 +940,8 @@ impl_identity_task!(GroupContextsTask, Vec<WrappedGroupContextResult>, |this| {
                     );
                     WrappedGroupContextResult {
                         group_id: group_id.clone(),
-                        current_epoch: -1,
-                        pending_epoch: -1,
+                        current_epoch: BigInt::from(-1i64),
+                        pending_epoch: BigInt::from(-1i64),
                         tree_hash: Vec::new(),
                         err: Some(err.to_string()),
                         pending_operation: None,
@@ -1825,7 +1852,7 @@ impl_identity_task!(
                 client_jid: result.client_jid,
                 mls_client_id: result.mls_client_id,
                 mls_fingerprint: result.mls_fingerprint,
-                epoch: result.epoch.map(|e| e as i64),
+                epoch: result.epoch.map(BigInt::from),
                 group_id: result.group_id,
                 proposal: result.proposal_type.into(),
             }),
@@ -1846,7 +1873,7 @@ pub struct ReAddResult {
     pub commit: Vec<u8>,
     pub welcome: Option<Vec<u8>>,
     pub group_info: Option<Vec<u8>>,
-    pub current_epoch: i64,
+    pub current_epoch: BigInt,
     pub pre_tree_hash: Vec<u8>,
 }
 
@@ -1856,7 +1883,7 @@ impl From<core::ReAddResult> for ReAddResult {
             welcome: value.welcome,
             commit: value.commit,
             group_info: value.group_info,
-            current_epoch: value.current_epoch as i64,
+            current_epoch: BigInt::from(value.current_epoch),
             pre_tree_hash: value.pre_tree_hash,
         }
     }
@@ -2396,7 +2423,7 @@ impl UqMls {
         Ok(AsyncTask::new(ProcessAllMessagesTask {
             conn: self.conn.clone(),
             provider: self.provider.clone(),
-            args: Some(build_process_all_messages_args(args)),
+            args: Some(build_process_all_messages_args(args)?),
             join_config: Some(
                 MlsGroupJoinConfig::builder()
                     .wire_format_policy(self.wire_format_policy())

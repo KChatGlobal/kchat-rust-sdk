@@ -1,5 +1,9 @@
 # KChat Rust SDK
 
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Rust](https://img.shields.io/badge/rust-stable%20(edition%202024)-orange.svg)](https://www.rust-lang.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
+
 A Cargo workspace containing the Rust SDK that powers the [Messaging Layer Security (MLS)](https://datatracker.ietf.org/wg/mls/about/) end-to-end encryption layer for KChat. The SDK wraps [OpenMLS](https://github.com/openmls/openmls) with KChat-specific business logic and exposes the same core to Swift, Kotlin and Node.js through cross-language bindings.
 
 ## Workspace Layout
@@ -112,6 +116,27 @@ openmls_rust_crypto   = { git = "https://github.com/KChatGlobal/openmls.git", br
 ```
 
 The fork enables fork-resolution and additional storage extensions required by KChat.
+
+## Contributing
+
+Contributions are welcome! Please read [`CONTRIBUTING.md`](./CONTRIBUTING.md) for
+development setup, coding standards, and the pull-request process. Before
+opening a PR, make sure the following pass:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+By contributing you agree to abide by the project's Code of Conduct (see
+[`CONTRIBUTING.md`](./CONTRIBUTING.md#code-of-conduct)).
+
+## Security
+
+This SDK is part of an end-to-end encryption stack. If you discover a security
+vulnerability, **please do not open a public issue** — follow the responsible
+disclosure process in [`SECURITY.md`](./SECURITY.md).
 
 ## License
 

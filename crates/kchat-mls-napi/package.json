@@ -26,6 +26,7 @@
     "index.js",
     "index.d.ts",
     "npm/**/*",
+    "scripts/**/*",
     "*.node",
     "README.md"
   ],

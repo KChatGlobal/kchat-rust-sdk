@@ -217,7 +217,10 @@ fn max_past_epochs_allows_decrypting_messages_from_past_epochs() {
                 );
             }
             Err(err) => {
-                println!("===> {:?}", err.to_string());
+                panic!(
+                    "bob must decrypt message {i} encrypted at epoch {epoch_at_encryption} \
+                     (bob_epoch={bob_epoch}), but decryption failed: {err}",
+                );
             }
         }
     }

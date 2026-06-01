@@ -31,12 +31,6 @@ use uq_openmls::{
 
 use crate::error::Error;
 
-impl From<Error> for napi::Error {
-    fn from(e: Error) -> Self {
-        napi::Error::new(napi::Status::GenericFailure, e.to_string())
-    }
-}
-
 type LogThreadsafeFunction = ThreadsafeFunction<String, (), FnArgs<(String,)>, napi::Status, false>;
 fn emit_debug_log_async(callback: Option<&LogThreadsafeFunction>, msg: String) {
     if let Some(cb) = callback {
@@ -744,7 +738,7 @@ impl_identity_task!(GroupEpochTask, WrappedGroupEpochResult, |this| {
         Ok(context) => WrappedGroupEpochResult {
             group_id: this.group_id.clone(),
             epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
-                BigInt::from(context.epoch().as_u64() as i64 - 1)
+                BigInt::from(context.epoch().as_u64().saturating_sub(1))
             } else {
                 BigInt::from(context.epoch().as_u64())
             },
@@ -803,9 +797,9 @@ impl_identity_task!(GroupEpochsTask, Vec<WrappedGroupEpochResult>, |this| {
             match core::group_context(&this.provider, group_id) {
                 Ok(context) => {
                     let epoch = if pending_operation.as_ref() == Some(&join_by_external_commit) {
-                        context.epoch().as_u64() as i64 - 1
+                        context.epoch().as_u64().saturating_sub(1)
                     } else {
-                        context.epoch().as_u64() as i64
+                        context.epoch().as_u64()
                     };
 
                     WrappedGroupEpochResult {
@@ -857,7 +851,7 @@ impl_identity_task!(GroupContextTask, WrappedGroupContextResult, |this| {
             group_id: this.group_id.clone(),
             current_epoch: BigInt::from(context.epoch().as_u64()),
             pending_epoch: if pending_operation == Some(OP_JOIN_BY_EXTERNAL_COMMIT.to_owned()) {
-                BigInt::from(context.epoch().as_u64() as i64 - 1)
+                BigInt::from(context.epoch().as_u64().saturating_sub(1))
             } else {
                 BigInt::from(context.epoch().as_u64())
             },
@@ -916,10 +910,10 @@ impl_identity_task!(GroupContextsTask, Vec<WrappedGroupContextResult>, |this| {
             let pending_operation = pending_operations.get(group_id).cloned();
             match core::group_context(&this.provider, group_id) {
                 Ok(context) => {
-                    let current_epoch = context.epoch().as_u64() as i64;
+                    let current_epoch = context.epoch().as_u64();
                     let pending_epoch =
                         if pending_operation.as_ref() == Some(&join_by_external_commit) {
-                            current_epoch - 1
+                            current_epoch.saturating_sub(1)
                         } else {
                             current_epoch
                         };

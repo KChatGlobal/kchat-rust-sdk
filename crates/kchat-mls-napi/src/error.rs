@@ -94,6 +94,80 @@ pub enum Error {
     Proposal(String),
 }
 
+impl Error {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Error::Mls(_) => "MLS_ERROR",
+            Error::Crypto(_) => "CRYPTO_ERROR",
+            Error::KeyPackageNew(_) => "KEY_PACKAGE_NEW_ERROR",
+            Error::AddMembers(_) => "ADD_MEMBERS_ERROR",
+            Error::MergePendingCommit(_) => "MERGE_PENDING_COMMIT_ERROR",
+            Error::NewGroup(_) => "NEW_GROUP_ERROR",
+            Error::ProcessMessage(_) => "PROCESS_MESSAGE_ERROR",
+            Error::MergeCommit(_) => "MERGE_COMMIT_ERROR",
+            Error::InvalidOperationMessage => "INVALID_OPERATION_MESSAGE",
+            Error::InvalidWelcomeMessage => "INVALID_WELCOME_MESSAGE",
+            Error::InvalidApplicationMessage => "INVALID_APPLICATION_MESSAGE",
+            Error::InvalidProposalMessage => "INVALID_PROPOSAL_MESSAGE",
+            Error::InvalidGroupInfo => "INVALID_GROUP_INFO",
+            Error::Welcome(_) => "WELCOME_ERROR",
+            Error::WelcomeGroupAlreadyExisted => "WELCOME_GROUP_ALREADY_EXISTED",
+            Error::ProtocolMessage(_) => "PROTOCOL_MESSAGE_ERROR",
+            Error::Storage(_) => "STORAGE_ERROR",
+            Error::KeyPackageVerify(_) => "KEY_PACKAGE_VERIFY_ERROR",
+            Error::GroupIsNotExisted => "GROUP_NOT_EXISTED",
+            Error::GroupIsAlreadyExisted => "GROUP_ALREADY_EXISTED",
+            Error::CreateMessage(_) => "CREATE_MESSAGE_ERROR",
+            Error::ExportGroupInfo(_) => "EXPORT_GROUP_INFO_ERROR",
+            Error::ExportGroupInfoInvalidExportType => "EXPORT_GROUP_INFO_INVALID_EXPORT_TYPE",
+            Error::ExternalCommit(_) => "EXTERNAL_COMMIT_ERROR",
+            Error::CreationFromExternal(_) => "CREATION_FROM_EXTERNAL_ERROR",
+            Error::MissingRatchetTree => "MISSING_RATCHET_TREE",
+            Error::CredentialIsExisted => "CREDENTIAL_ALREADY_EXISTED",
+            Error::RemoveMembers(_) => "REMOVE_MEMBERS_ERROR",
+            Error::CommitToPendingProposals(_) => "COMMIT_TO_PENDING_PROPOSALS_ERROR",
+            Error::LeaveGroup(_) => "LEAVE_GROUP_ERROR",
+            Error::UpdateLeafNode(_) => "UPDATE_LEAF_NODE_ERROR",
+            Error::Sqlite(_) => "SQLITE_ERROR",
+            Error::SqliteNotFound => "SQLITE_NOT_FOUND",
+            Error::SqliteMigration(_) => "SQLITE_MIGRATION_ERROR",
+            Error::Deserialize => "DESERIALIZE_ERROR",
+            Error::Serialize => "SERIALIZE_ERROR",
+            Error::MissingOwnLeafNodeInGroup => "MISSING_OWN_LEAF_NODE_IN_GROUP",
+            Error::MissingSignatureKeyPair => "MISSING_SIGNATURE_KEY_PAIR",
+            Error::SomeMembersAlreadyExistedInGroup => "SOME_MEMBERS_ALREADY_EXISTED_IN_GROUP",
+            Error::ExternalCommitBuilder(_) => "EXTERNAL_COMMIT_BUILDER_ERROR",
+            Error::ExternalCommitBuilderFinalize(_) => "EXTERNAL_COMMIT_BUILDER_FINALIZE_ERROR",
+            Error::CreateCommit(_) => "CREATE_COMMIT_ERROR",
+            Error::ExportSecret(_) => "EXPORT_SECRET_ERROR",
+            Error::ReAdd(_) => "RE_ADD_ERROR",
+            Error::CommitBuilderStage(_) => "COMMIT_BUILDER_STAGE_ERROR",
+            Error::Proposal(_) => "PROPOSAL_ERROR",
+        }
+    }
+
+    pub fn napi_status(&self) -> napi::Status {
+        match self {
+            Error::InvalidOperationMessage
+            | Error::InvalidWelcomeMessage
+            | Error::InvalidApplicationMessage
+            | Error::InvalidProposalMessage
+            | Error::InvalidGroupInfo
+            | Error::ExportGroupInfoInvalidExportType
+            | Error::KeyPackageVerify(_)
+            | Error::MissingRatchetTree
+            | Error::Deserialize => napi::Status::InvalidArg,
+            _ => napi::Status::GenericFailure,
+        }
+    }
+}
+
+impl From<Error> for napi::Error {
+    fn from(e: Error) -> Self {
+        napi::Error::new(e.napi_status(), format!("[{}] {}", e.code(), e))
+    }
+}
+
 impl From<String> for Error {
     fn from(e: String) -> Self {
         Self::Mls(e)

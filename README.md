@@ -28,8 +28,8 @@ kchat-mls-napi  ─┘
   - [`cargo-swift`](https://github.com/antoniusnaumann/cargo-swift) for iOS packaging.
   - [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk) and the Android NDK for Android.
 - For Node.js bindings (`kchat-mls-napi`):
-  - Node.js 10+ with N-API support.
-  - `yarn` 1.x or 4.x (the crate ships with `yarn@4.9.1` via Corepack).
+  - Node.js 10.20+ with Node-API v6 support (required by the `napi6` feature).
+  - `yarn` 4.x (the crate ships with `yarn@4.9.1` via Corepack).
   - `@napi-rs/cli`.
 
 ## Build

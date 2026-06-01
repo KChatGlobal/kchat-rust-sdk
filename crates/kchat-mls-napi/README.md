@@ -5,8 +5,8 @@ This crate provides bindings for the MLS Rust SDK using [NAPI-RS](https://napi.r
 ## Prerequisites
 
 - Install the latest `Rust`
-- Install `Node.js@10+` which fully supported `Node-API`
-- Install `yarn@1.x`
+- Install `Node.js@10.20+` which fully supports `Node-API` v6 (required by the `napi6` feature)
+- Install `yarn@4.x` (the crate ships `yarn@4.9.1` via Corepack)
 - Install `napi`
 
 ## Setup

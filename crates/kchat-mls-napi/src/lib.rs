@@ -483,9 +483,15 @@ fn build_process_all_messages_args(
             Ok(kchat_mls::AllMessagesOfGroupArgs {
                 group_id: msg.group_id,
                 messages,
-                current_epoch: bigint_to_i64(msg.current_epoch, "AllMessagesOfGroupArgs.current_epoch")?,
+                current_epoch: bigint_to_i64(
+                    msg.current_epoch,
+                    "AllMessagesOfGroupArgs.current_epoch",
+                )?,
                 current_tree_hash: msg.current_tree_hash,
-                pending_epoch: bigint_to_i64(msg.pending_epoch, "AllMessagesOfGroupArgs.pending_epoch")?,
+                pending_epoch: bigint_to_i64(
+                    msg.pending_epoch,
+                    "AllMessagesOfGroupArgs.pending_epoch",
+                )?,
                 pending_tree_hash: msg.pending_tree_hash,
             })
         })

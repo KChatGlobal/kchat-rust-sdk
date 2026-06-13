@@ -214,12 +214,8 @@ impl StorableGroupEpochMessageSecrets {
         let mut stmt = connection.prepare_cached(
             "SELECT gd.group_id
             FROM openmls_group_data gd
-            LEFT JOIN openmls_group_epoch_meta gem
-                ON gem.provider_version = gd.provider_version
-                AND gem.group_id = gd.group_id
             WHERE gd.provider_version = ?1
                 AND gd.data_type = ?2
-                AND COALESCE(gem.migration_done, 0) = 0
             ORDER BY gd.rowid DESC
             LIMIT ?3",
         )?;
@@ -235,6 +231,25 @@ impl StorableGroupEpochMessageSecrets {
             },
         )?;
         rows.collect()
+    }
+
+    pub(super) fn has_legacy_message_secrets(
+        connection: &SqliteConnectionPool,
+    ) -> Result<bool, rusqlite::Error> {
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM openmls_group_data
+                WHERE provider_version = ?1
+                    AND data_type = ?2
+            )",
+        )?;
+        let exists = stmt.query_row(
+            params![STORAGE_PROVIDER_VERSION, GroupDataType::MessageSecrets],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(exists != 0)
     }
 }
 
@@ -316,6 +331,10 @@ impl<C: Codec> SqliteStorageProvider<C> {
             &self.connection_pool(),
             DEFAULT_MIGRATION_BATCH_SIZE,
         )
+    }
+
+    pub fn has_legacy_message_secrets(&self) -> Result<bool, rusqlite::Error> {
+        StorableGroupEpochMessageSecrets::has_legacy_message_secrets(&self.connection_pool())
     }
 }
 

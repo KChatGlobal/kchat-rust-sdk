@@ -97,6 +97,8 @@ fn migrate_group_epoch_message_secrets(
     provider
         .storage()
         .replace_group_epoch_message_secrets(group_id, message_secrets)
+        .map_err(Error::from)?;
+    openmls_traits::storage::StorageProvider::delete_message_secrets(provider.storage(), group_id)
         .map_err(Error::from)
 }
 
@@ -187,6 +189,10 @@ impl SqliteProvider {
                 log(msg);
             }
         };
+        if self.mls_storage.is_legacy_message_secrets_migration_done()? {
+            emit("epoch message secrets migration skipped state=done".to_owned());
+            return Ok(());
+        }
         let group_ids = self
             .mls_storage
             .list_group_ids_with_message_secrets::<GroupId>()?;
@@ -194,6 +200,12 @@ impl SqliteProvider {
             "epoch message secrets migration selected batch count={}",
             group_ids.len()
         ));
+        if group_ids.is_empty() {
+            self.mls_storage
+                .mark_legacy_message_secrets_migration_done(true)?;
+            emit("epoch message secrets migration marked state=done".to_owned());
+            return Ok(());
+        }
 
         for group_id in group_ids {
             let group_id_text = String::from_utf8_lossy(group_id.as_slice()).to_string();
@@ -218,6 +230,11 @@ impl SqliteProvider {
                     group_id_text, err
                 )),
             }
+        }
+        if !self.mls_storage.has_legacy_message_secrets()? {
+            self.mls_storage
+                .mark_legacy_message_secrets_migration_done(true)?;
+            emit("epoch message secrets migration marked state=done".to_owned());
         }
 
         Ok(())

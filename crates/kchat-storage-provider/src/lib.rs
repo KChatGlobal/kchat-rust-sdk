@@ -29,6 +29,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 mod codec;
 mod encryption_key_pairs;
+mod epoch_migration_state;
 mod epoch_key_pairs;
 mod group_data;
 mod group_epoch_message_secrets;

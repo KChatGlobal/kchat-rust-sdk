@@ -7,7 +7,6 @@ use crate::{
     STORAGE_PROVIDER_VERSION,
     codec::Codec,
     group_data::GroupDataType,
-    group_epoch_meta::StorableGroupEpochMeta,
     storage_provider::{SqliteConnectionPool, SqliteStorageProvider, TransactionalStorageProvider},
     wrappers::{KeyRefWrapper, KeyWrapper},
 };
@@ -124,7 +123,7 @@ impl StorableGroupEpochMessageSecrets {
         for (epoch, bytes) in message_secrets {
             Self::store_in_tx::<C, _>(tx, group_id, epoch, &bytes)?;
         }
-        StorableGroupEpochMeta::mark_migration_done_in_tx::<C, _>(tx, group_id, true)
+        Ok(())
     }
 
     pub(super) fn delete<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
@@ -251,6 +250,95 @@ impl StorableGroupEpochMessageSecrets {
         )?;
         Ok(exists != 0)
     }
+
+    pub(super) fn has_legacy_message_secrets_for_group<
+        C: Codec,
+        GroupId: Key<STORAGE_PROVIDER_VERSION>,
+    >(
+        connection: &SqliteConnectionPool,
+        group_id: &GroupId,
+    ) -> Result<bool, rusqlite::Error> {
+        let connection = connection.checkout()?;
+        let mut stmt = connection.prepare_cached(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM openmls_group_data
+                WHERE provider_version = ?1
+                    AND group_id = ?2
+                    AND data_type = ?3
+            )",
+        )?;
+        let exists = stmt.query_row(
+            params![
+                STORAGE_PROVIDER_VERSION,
+                KeyRefWrapper::<C, _>(group_id, PhantomData),
+                GroupDataType::MessageSecrets,
+            ],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(exists != 0)
+    }
+
+    pub(super) fn has_legacy_message_secrets_for_group_in_tx<
+        C: Codec,
+        GroupId: Key<STORAGE_PROVIDER_VERSION>,
+    >(
+        tx: &rusqlite::Transaction<'_>,
+        group_id: &GroupId,
+    ) -> Result<bool, rusqlite::Error> {
+        let mut stmt = tx.prepare_cached(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM openmls_group_data
+                WHERE provider_version = ?1
+                    AND group_id = ?2
+                    AND data_type = ?3
+            )",
+        )?;
+        let exists = stmt.query_row(
+            params![
+                STORAGE_PROVIDER_VERSION,
+                KeyRefWrapper::<C, _>(group_id, PhantomData),
+                GroupDataType::MessageSecrets,
+            ],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(exists != 0)
+    }
+
+    pub(super) fn is_migration_done<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
+        connection: &SqliteConnectionPool,
+        group_id: &GroupId,
+    ) -> Result<bool, rusqlite::Error> {
+        Ok(!Self::has_legacy_message_secrets_for_group::<C, _>(
+            connection, group_id,
+        )?)
+    }
+
+    pub(super) fn is_migration_done_in_tx<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
+        tx: &rusqlite::Transaction<'_>,
+        group_id: &GroupId,
+    ) -> Result<bool, rusqlite::Error> {
+        Ok(!Self::has_legacy_message_secrets_for_group_in_tx::<C, _>(
+            tx, group_id,
+        )?)
+    }
+
+    pub(super) fn mark_migration_done<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
+        _connection: &SqliteConnectionPool,
+        _group_id: &GroupId,
+        _done: bool,
+    ) -> Result<(), rusqlite::Error> {
+        Ok(())
+    }
+
+    pub(super) fn mark_migration_done_in_tx<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
+        _tx: &rusqlite::Transaction<'_>,
+        _group_id: &GroupId,
+        _done: bool,
+    ) -> Result<(), rusqlite::Error> {
+        Ok(())
+    }
 }
 
 impl<C: Codec> SqliteStorageProvider<C> {
@@ -258,7 +346,7 @@ impl<C: Codec> SqliteStorageProvider<C> {
         &self,
         group_id: &GroupId,
     ) -> Result<bool, rusqlite::Error> {
-        StorableGroupEpochMeta::is_migration_done::<C, _>(&self.connection_pool(), group_id)
+        StorableGroupEpochMessageSecrets::is_migration_done::<C, _>(&self.connection_pool(), group_id)
     }
 
     pub fn mark_group_epoch_message_secrets_migrated<GroupId: Key<STORAGE_PROVIDER_VERSION>>(
@@ -266,7 +354,11 @@ impl<C: Codec> SqliteStorageProvider<C> {
         group_id: &GroupId,
         done: bool,
     ) -> Result<(), rusqlite::Error> {
-        StorableGroupEpochMeta::mark_migration_done::<C, _>(&self.connection_pool(), group_id, done)
+        StorableGroupEpochMessageSecrets::mark_migration_done::<C, _>(
+            &self.connection_pool(),
+            group_id,
+            done,
+        )
     }
 
     pub fn load_group_epoch_message_secrets<GroupId: Key<STORAGE_PROVIDER_VERSION>>(
@@ -378,6 +470,25 @@ impl<'tx, C: Codec> TransactionalStorageProvider<'tx, C> {
         group_id: &GroupId,
     ) -> Result<(), rusqlite::Error> {
         StorableGroupEpochMessageSecrets::delete_in_tx::<C, _>(self.tx(), group_id)
+    }
+
+    pub fn is_group_epoch_message_secrets_migrated<GroupId: Key<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<bool, rusqlite::Error> {
+        StorableGroupEpochMessageSecrets::is_migration_done_in_tx::<C, _>(self.tx(), group_id)
+    }
+
+    pub fn mark_group_epoch_message_secrets_migrated<GroupId: Key<STORAGE_PROVIDER_VERSION>>(
+        &self,
+        group_id: &GroupId,
+        done: bool,
+    ) -> Result<(), rusqlite::Error> {
+        StorableGroupEpochMessageSecrets::mark_migration_done_in_tx::<C, _>(
+            self.tx(),
+            group_id,
+            done,
+        )
     }
 
     pub fn prune_group_epoch_message_secrets<GroupId: Key<STORAGE_PROVIDER_VERSION>>(

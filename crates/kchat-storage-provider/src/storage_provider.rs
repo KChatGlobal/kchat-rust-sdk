@@ -18,7 +18,6 @@ use crate::{
     epoch_key_pairs::{StorableEpochKeyPairs, StorableEpochKeyPairsRef},
     group_data::{GroupDataType, StorableGroupData, StorableGroupDataRef},
     group_epoch_message_secrets::StorableGroupEpochMessageSecrets,
-    group_epoch_meta::StorableGroupEpochMeta,
     key_packages::{StorableHashRef, StorableKeyPackage, StorableKeyPackageRef},
     own_leaf_nodes::{StorableLeafNode, StorableLeafNodeRef},
     proposals::{StorableProposal, StorableProposalRef},
@@ -566,7 +565,7 @@ impl<C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION> for SqliteStorageProvid
         &self,
         group_id: &GroupId,
     ) -> Result<bool, Self::Error> {
-        StorableGroupEpochMeta::is_migration_done::<C, _>(&self.connection, group_id)
+        StorableGroupEpochMessageSecrets::is_migration_done::<C, _>(&self.connection, group_id)
     }
 
     fn group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
@@ -608,7 +607,11 @@ impl<C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION> for SqliteStorageProvid
         group_id: &GroupId,
         done: bool,
     ) -> Result<(), Self::Error> {
-        StorableGroupEpochMeta::mark_migration_done::<C, _>(&self.connection, group_id, done)
+        StorableGroupEpochMessageSecrets::mark_migration_done::<C, _>(
+            &self.connection,
+            group_id,
+            done,
+        )
     }
 
     fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
@@ -1272,7 +1275,7 @@ impl<'tx, C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION>
         &self,
         group_id: &GroupId,
     ) -> Result<bool, Self::Error> {
-        StorableGroupEpochMeta::is_migration_done_in_tx::<C, _>(self.tx, group_id)
+        StorableGroupEpochMessageSecrets::is_migration_done_in_tx::<C, _>(self.tx, group_id)
     }
 
     fn group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
@@ -1312,7 +1315,11 @@ impl<'tx, C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION>
         group_id: &GroupId,
         done: bool,
     ) -> Result<(), Self::Error> {
-        StorableGroupEpochMeta::mark_migration_done_in_tx::<C, _>(self.tx, group_id, done)
+        StorableGroupEpochMessageSecrets::mark_migration_done_in_tx::<C, _>(
+            self.tx,
+            group_id,
+            done,
+        )
     }
 
     fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(

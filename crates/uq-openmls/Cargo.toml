@@ -26,3 +26,4 @@ secrecy = { workspace = true }
 [dev-dependencies]
 openmls = { workspace = true, features = ["fork-resolution", "libcrux-provider", "test-utils"] }
 criterion = { workspace = true }
+openmls_sqlite_storage = { git = "ssh://git@github-personal/KChatGlobal/openmls.git", branch = "main" }

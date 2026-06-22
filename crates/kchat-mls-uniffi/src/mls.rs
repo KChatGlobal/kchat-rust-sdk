@@ -578,14 +578,13 @@ impl UqMls {
         member_ids: &[String],
         key_packages: &[Vec<u8>],
     ) -> Result<ReAddResult, Error> {
-        if let Some(op) = get_group_pending_operation(&self.conn, group_id).unwrap_or(None) {
-            if !op.eq(OP_NONE) {
+        if let Some(op) = get_group_pending_operation(&self.conn, group_id).unwrap_or(None)
+            && !op.eq(OP_NONE) {
                 return Err(Error::ReAdd(format!(
                     "There is a pending operation: {}",
                     op
                 )));
             }
-        }
 
         let result = self
             .provider
@@ -655,7 +654,7 @@ impl UqMls {
     }
 
     pub fn process_welcome(&self, welcome: &[u8]) -> Result<(), Error> {
-        let _ = self
+        self
             .provider
             .transaction(|tx_provider| {
                 core::process_welcome(
@@ -1131,11 +1130,10 @@ impl UqMls {
         let members = group
             .members()
             .filter_map(|member| {
-                if let Ok(credential) = BasicCredential::try_from(member.credential) {
-                    if let Ok(member_id) = String::from_utf8(credential.identity().to_vec()) {
+                if let Ok(credential) = BasicCredential::try_from(member.credential)
+                    && let Ok(member_id) = String::from_utf8(credential.identity().to_vec()) {
                         return Some(member_id);
                     }
-                }
 
                 None
             })

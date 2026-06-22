@@ -14,11 +14,10 @@ pub(crate) fn find_members_by_identity<'a>(
     let mut result = Vec::new();
 
     for member in members {
-        if let Ok(member_credential) = BasicCredential::try_from(member.credential.clone()) {
-            if identities.contains(&member_credential.identity()) {
+        if let Ok(member_credential) = BasicCredential::try_from(member.credential.clone())
+            && identities.contains(&member_credential.identity()) {
                 result.push(member);
             }
-        }
     }
 
     result

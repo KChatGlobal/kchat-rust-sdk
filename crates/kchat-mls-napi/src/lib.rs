@@ -1725,11 +1725,10 @@ pub struct ReaddTask {
 }
 
 impl_identity_task!(ReaddTask, ReAddResult, |this| {
-    if let Some(op) = get_group_pending_operation(&this.conn, &this.group_id).unwrap_or(None) {
-        if !op.eq(OP_NONE) {
+    if let Some(op) = get_group_pending_operation(&this.conn, &this.group_id).unwrap_or(None)
+        && !op.eq(OP_NONE) {
             return Err(Error::ReAdd(format!("There is a pending operation: {}", op)).into());
         }
-    }
 
     let result = this
         .provider
@@ -1827,11 +1826,10 @@ impl_identity_task!(MembersTask, Vec<String>, |this| {
     let members = mls_group
         .members()
         .filter_map(|member| {
-            if let Ok(credential) = BasicCredential::try_from(member.credential) {
-                if let Ok(member_id) = String::from_utf8(credential.identity().to_vec()) {
+            if let Ok(credential) = BasicCredential::try_from(member.credential)
+                && let Ok(member_id) = String::from_utf8(credential.identity().to_vec()) {
                     return Some(member_id);
                 }
-            }
             None
         })
         .collect::<Vec<String>>();

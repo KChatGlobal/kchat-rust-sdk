@@ -426,8 +426,8 @@ pub fn process_proposal_message<Provider: OpenMlsProvider>(
         processed_message.into_content()
     {
         let proposal: Proposal = staged_proposal.proposal().into();
-        if let Sender::Member(member_leaf_node) = staged_proposal.sender() {
-            if let Some(queued_proposal) = group
+        if let Sender::Member(member_leaf_node) = staged_proposal.sender()
+            && let Some(queued_proposal) = group
                 .member(*member_leaf_node)
                 .and_then(|credential| BasicCredential::try_from(credential.to_owned()).ok())
                 .and_then(|credential| String::from_utf8(credential.identity().to_vec()).ok())
@@ -440,7 +440,6 @@ pub fn process_proposal_message<Provider: OpenMlsProvider>(
             {
                 return Ok(queued_proposal);
             }
-        }
     }
 
     Err(Error::InvalidProposalMessage)
@@ -552,8 +551,8 @@ pub fn join_by_external_commit<Provider: OpenMlsProvider>(
         ratchet_tree_extension.ratchet_tree().to_owned(),
         verifiable_group_info.clone(),
         ProposalStore::new(),
-    ) {
-        if !find_members_by_identity(
+    )
+        && !find_members_by_identity(
             &public_group.members().collect::<Vec<Member>>(),
             &[user_id.as_bytes()],
         )
@@ -561,7 +560,6 @@ pub fn join_by_external_commit<Provider: OpenMlsProvider>(
         {
             return Err(Error::CredentialIsExisted);
         }
-    }
 
     let (credential_with_key, signer) =
         get_credential_with_key(user_id, provider, ciphersuite, public_key)?;
@@ -857,11 +855,11 @@ pub fn group_context<Provider: OpenMlsProvider>(
     provider: &Provider,
     group_id: &str,
 ) -> Result<GroupContext, Error> {
-    Ok(provider
+    provider
         .storage()
         .group_context(&GroupId::from_slice(group_id.as_bytes()))
         .map_err(|e| Error::Storage(e.to_string()))?
-        .ok_or(Error::GroupIsNotExisted)?)
+        .ok_or(Error::GroupIsNotExisted)
 }
 
 /// Delete group

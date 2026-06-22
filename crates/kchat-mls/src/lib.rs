@@ -137,9 +137,9 @@ impl From<Option<String>> for GroupPendingOperation {
     }
 }
 
-impl Into<String> for GroupPendingOperation {
-    fn into(self) -> String {
-        match self {
+impl From<GroupPendingOperation> for String {
+    fn from(val: GroupPendingOperation) -> Self {
+        match val {
             GroupPendingOperation::CreateGroup => OP_CREATE_GROUP.to_owned(),
             GroupPendingOperation::JoinByExternalCommit => OP_JOIN_BY_EXTERNAL_COMMIT.to_owned(),
             GroupPendingOperation::LeaveGroup => OP_LEAVE_GROUP.to_owned(),
@@ -337,7 +337,7 @@ pub fn process_all_messages(
             };
 
             let pending_operation: GroupPendingOperation =
-                get_group_pending_operation(&conn, group_id)?.into();
+                get_group_pending_operation(conn, group_id)?.into();
 
             let first_message = get_first_message(
                 existing_group.epoch().as_u64(),
@@ -375,11 +375,11 @@ pub fn process_all_messages(
                                     })
                                     .map_err(|e| Error::Storage(e.to_string()))?;
                                 result.deleted_groups.push(group_id.to_owned());
-                                let _ = delete_group_status(&conn, group_id);
+                                let _ = delete_group_status(conn, group_id);
                                 group_deleted = true;
                             }
                             let _ = insert_or_update_group_status(
-                                &conn,
+                                conn,
                                 group_id,
                                 GroupPendingOperation::None,
                             );
@@ -394,7 +394,7 @@ pub fn process_all_messages(
                                     })
                                     .map_err(|e| Error::Storage(e.to_string()))?;
                                 result.deleted_groups.push(group_id.to_owned());
-                                let _ = delete_group_status(&conn, group_id);
+                                let _ = delete_group_status(conn, group_id);
                                 group_deleted = true;
                             } else {
                                 mls_group = Some(
@@ -415,11 +415,11 @@ pub fn process_all_messages(
                                 })
                                 .map_err(|e| Error::Storage(e.to_string()))?;
                             result.deleted_groups.push(group_id.to_owned());
-                            let _ = delete_group_status(&conn, group_id);
+                            let _ = delete_group_status(conn, group_id);
                             group_deleted = true;
                         }
                         let _ = insert_or_update_group_status(
-                            &conn,
+                            conn,
                             group_id,
                             GroupPendingOperation::None,
                         );
@@ -461,7 +461,7 @@ pub fn process_all_messages(
                     }
 
                     let _ =
-                        insert_or_update_group_status(&conn, group_id, GroupPendingOperation::None);
+                        insert_or_update_group_status(conn, group_id, GroupPendingOperation::None);
                 }
                 GroupPendingOperation::LeaveGroup => {
                     // NOTE: we don't handle leave group in this operation
@@ -485,8 +485,8 @@ pub fn process_all_messages(
                 lastest_epoch = msg.epoch;
             }
 
-            if msg.message_type == MessageType::Proposal {
-                if let Some(group) = &mut mls_group {
+            if msg.message_type == MessageType::Proposal
+                && let Some(group) = &mut mls_group {
                     if let Ok(proposal) = process_proposal_message(group, provider, &msg.blob) {
                         emit_log(log, || {
                             format!("start process proposal, group {}", group_id)
@@ -516,8 +516,8 @@ pub fn process_all_messages(
                             )
                         });
 
-                        if let Some(client_jid) = custom_proposal.client_jid {
-                            if custom_proposal.proposal_type == CustomProposalType::Remove {
+                        if let Some(client_jid) = custom_proposal.client_jid
+                            && custom_proposal.proposal_type == CustomProposalType::Remove {
                                 let (_, group_member_jid_set) = group_member_sets
                                     .get_or_insert_with(|| {
                                         collect_group_member_ids_and_jids(group)
@@ -539,14 +539,12 @@ pub fn process_all_messages(
                                     );
                                 }
                             }
-                        }
 
                         emit_log(log, || {
                             format!("end process custom proposal, group {}", group_id)
                         });
                     }
                 }
-            }
         }
 
         // Process all messages
@@ -684,13 +682,12 @@ pub fn process_all_messages(
                                     {
                                         already_remove_members.push(member_info.to_owned());
                                     }
-                                } else if let Some(client_jid) = &member_info.client_jid {
-                                    if msg.epoch >= *epoch
+                                } else if let Some(client_jid) = &member_info.client_jid
+                                    && msg.epoch >= *epoch
                                         && !group_member_jid_set.contains(client_jid)
                                     {
                                         already_remove_members.push(member_info.to_owned());
                                     }
-                                }
                             }
                         }
 
@@ -700,8 +697,8 @@ pub fn process_all_messages(
                     }
                 }
                 MessageType::Proposal => {
-                    if let Some(custom_proposal) = process_custom_proposal(&msg.blob) {
-                        if custom_proposal.proposal_type == CustomProposalType::ReAdd
+                    if let Some(custom_proposal) = process_custom_proposal(&msg.blob)
+                        && custom_proposal.proposal_type == CustomProposalType::ReAdd
                             && msg.epoch > lastest_epoch
                         {
                             members_to_readd.insert(MemberInfo {
@@ -716,7 +713,6 @@ pub fn process_all_messages(
                                 mls_fingerprint: Some(msg.sender.to_owned()),
                             });
                         }
-                    }
                 }
                 MessageType::Unknown => {
                     emit_log(log, || {
@@ -730,7 +726,6 @@ pub fn process_all_messages(
             group_id: group_id.to_owned(),
             members_to_remove: members_to_remove_hashmap
                 .keys()
-                .into_iter()
                 .map(|member_id| member_id.to_owned())
                 .collect(),
             members_to_readd: members_to_readd
@@ -793,33 +788,24 @@ fn get_first_message(
         group_epoch -= 1;
     }
 
-    for message in &messages_of_group.messages {
-        if message.epoch == group_epoch + 1 && message.message_type == MessageType::Commit {
-            return Some(message);
-        }
-    }
-
-    None
+    messages_of_group.messages.iter().find(|&message| message.epoch == group_epoch + 1 && message.message_type == MessageType::Commit).map(|v| v as _)
 }
 
 fn own_id_from_leaf_node(group: &MlsGroup) -> Option<String> {
-    if let Some(own_leaf) = group.own_leaf() {
-        if let Ok(basic_cred) = BasicCredential::try_from(own_leaf.credential().to_owned()) {
-            if let Ok(id) = String::from_utf8(basic_cred.identity().to_vec()) {
+    if let Some(own_leaf) = group.own_leaf()
+        && let Ok(basic_cred) = BasicCredential::try_from(own_leaf.credential().to_owned())
+            && let Ok(id) = String::from_utf8(basic_cred.identity().to_vec()) {
                 return Some(id);
             }
-        }
-    }
 
     None
 }
 
 fn id_from_credential(cred: &Credential) -> Option<String> {
-    if let Ok(basic_cred) = BasicCredential::try_from(cred.to_owned()) {
-        if let Ok(id) = String::from_utf8(basic_cred.identity().to_vec()) {
+    if let Ok(basic_cred) = BasicCredential::try_from(cred.to_owned())
+        && let Ok(id) = String::from_utf8(basic_cred.identity().to_vec()) {
             return Some(id);
         }
-    }
 
     None
 }

@@ -35,5 +35,3 @@ openmls = { git = "ssh://git@github.com/KChatGlobal/openmls.git", branch = "main
 openmls_basic_credential = { git = "ssh://git@github.com/KChatGlobal/openmls.git", branch = "main" }
 openmls_traits = { git = "ssh://git@github.com/KChatGlobal/openmls.git", branch = "main" }
 openmls_rust_crypto = { git = "ssh://git@github.com/KChatGlobal/openmls.git", branch = "main" }
-
-// git@github.com:KChatGlobal/kchat-rust-sdk.git

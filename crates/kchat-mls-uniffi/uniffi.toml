@@ -2,3 +2,7 @@
 package_name = "com.kchat.mls"
 # Disabling Android optimisations due to uniffi tests breaking on missing import android
 android = true
+
+[bindings.swift]
+ffi_module_name = "RustFramework"
+ffi_module_filename = "RustFramework"

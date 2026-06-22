@@ -600,15 +600,6 @@ impl<C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION> for SqliteStorageProvid
         })
     }
 
-    fn mark_group_epoch_message_secrets_migrated<
-        GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
-    >(
-        &self,
-        _group_id: &GroupId,
-        _done: bool,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
 
     fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
         &self,
@@ -1304,15 +1295,6 @@ impl<'tx, C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION>
         StorableGroupEpochMessageSecrets::replace_in_tx::<C, _>(self.tx, group_id, message_secrets)
     }
 
-    fn mark_group_epoch_message_secrets_migrated<
-        GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
-    >(
-        &self,
-        _group_id: &GroupId,
-        _done: bool,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
 
     fn delete_group_epoch_message_secrets<GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>>(
         &self,

@@ -324,21 +324,6 @@ impl StorableGroupEpochMessageSecrets {
         )?)
     }
 
-    pub(super) fn mark_migration_done<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
-        _connection: &SqliteConnectionPool,
-        _group_id: &GroupId,
-        _done: bool,
-    ) -> Result<(), rusqlite::Error> {
-        Ok(())
-    }
-
-    pub(super) fn mark_migration_done_in_tx<C: Codec, GroupId: Key<STORAGE_PROVIDER_VERSION>>(
-        _tx: &rusqlite::Transaction<'_>,
-        _group_id: &GroupId,
-        _done: bool,
-    ) -> Result<(), rusqlite::Error> {
-        Ok(())
-    }
 }
 
 impl<C: Codec> SqliteStorageProvider<C> {
@@ -351,14 +336,10 @@ impl<C: Codec> SqliteStorageProvider<C> {
 
     pub fn mark_group_epoch_message_secrets_migrated<GroupId: Key<STORAGE_PROVIDER_VERSION>>(
         &self,
-        group_id: &GroupId,
-        done: bool,
+        _group_id: &GroupId,
+        _done: bool,
     ) -> Result<(), rusqlite::Error> {
-        StorableGroupEpochMessageSecrets::mark_migration_done::<C, _>(
-            &self.connection_pool(),
-            group_id,
-            done,
-        )
+        Ok(())
     }
 
     pub fn load_group_epoch_message_secrets<GroupId: Key<STORAGE_PROVIDER_VERSION>>(
@@ -481,14 +462,10 @@ impl<'tx, C: Codec> TransactionalStorageProvider<'tx, C> {
 
     pub fn mark_group_epoch_message_secrets_migrated<GroupId: Key<STORAGE_PROVIDER_VERSION>>(
         &self,
-        group_id: &GroupId,
-        done: bool,
+        _group_id: &GroupId,
+        _done: bool,
     ) -> Result<(), rusqlite::Error> {
-        StorableGroupEpochMessageSecrets::mark_migration_done_in_tx::<C, _>(
-            self.tx(),
-            group_id,
-            done,
-        )
+        Ok(())
     }
 
     pub fn prune_group_epoch_message_secrets<GroupId: Key<STORAGE_PROVIDER_VERSION>>(

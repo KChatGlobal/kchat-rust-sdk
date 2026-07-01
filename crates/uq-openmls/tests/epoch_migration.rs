@@ -10,8 +10,11 @@ use openmls::{
     group::{GroupId, MlsGroupCreateConfig, MlsGroupJoinConfig},
     prelude::{MlsMessageIn, tls_codec::Deserialize as _},
 };
+use openmls_rust_crypto::RustCrypto;
+use openmls_sqlite_storage::SqliteStorageProvider as LegacySqliteStorageProvider;
 use openmls_traits::OpenMlsProvider;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Serialize, de::DeserializeOwned};
 use uq_openmls::{
     core::{
         self, DEFAULT_CIPHERSUITE, create_group, group as load_group,
@@ -49,6 +52,61 @@ fn join_config(max_past_epochs: usize) -> MlsGroupJoinConfig {
         .build()
 }
 
+#[derive(Default)]
+struct LegacyJsonCodec;
+
+impl openmls_sqlite_storage::Codec for LegacyJsonCodec {
+    type Error = serde_json::Error;
+
+    fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>, Self::Error> {
+        serde_json::to_vec(value)
+    }
+
+    fn from_slice<T>(slice: &[u8]) -> Result<T, Self::Error>
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_slice(slice)
+    }
+}
+
+struct LegacyProvider {
+    crypto: RustCrypto,
+    storage: LegacySqliteStorageProvider<LegacyJsonCodec, Connection>,
+}
+
+impl LegacyProvider {
+    fn new(db_path: &str) -> Self {
+        let connection = Connection::open(db_path).expect("should open legacy sqlite db");
+        let mut storage = LegacySqliteStorageProvider::<LegacyJsonCodec, _>::new(connection);
+        storage
+            .run_migrations()
+            .expect("should run legacy sqlite migrations");
+        Self {
+            crypto: RustCrypto::default(),
+            storage,
+        }
+    }
+}
+
+impl OpenMlsProvider for LegacyProvider {
+    type CryptoProvider = RustCrypto;
+    type RandProvider = RustCrypto;
+    type StorageProvider = LegacySqliteStorageProvider<LegacyJsonCodec, Connection>;
+
+    fn storage(&self) -> &Self::StorageProvider {
+        &self.storage
+    }
+
+    fn crypto(&self) -> &Self::CryptoProvider {
+        &self.crypto
+    }
+
+    fn rand(&self) -> &Self::RandProvider {
+        &self.crypto
+    }
+}
+
 fn create_group_legacy(
     provider: &SqliteProvider,
     creator_id: &str,
@@ -70,7 +128,24 @@ fn create_group_legacy(
         .expect("should create legacy group");
 }
 
-fn advance_group_epoch(provider: &SqliteProvider, group_id: &str) {
+fn create_group_with_provider<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    creator_id: &str,
+    group_id: &str,
+    max_past_epochs: usize,
+) {
+    create_group(
+        provider,
+        creator_id,
+        group_id,
+        DEFAULT_CIPHERSUITE,
+        &group_config(max_past_epochs),
+        None,
+    )
+    .expect("should create group with provider");
+}
+
+fn advance_group_epoch<Provider: OpenMlsProvider>(provider: &Provider, group_id: &str) {
     let mut group = load_group(provider, group_id, []).expect("should load group");
     let signer = group_signer(&group, provider).expect("should load signer");
     update_leaf_node(&mut group, provider, &signer).expect("should update leaf node");
@@ -101,6 +176,64 @@ fn count_rows(connection: &Connection, table_name: &str) -> i64 {
         .expect("should count rows")
 }
 
+fn legacy_message_secrets_migration_done(db_path: &str) -> bool {
+    let connection = Connection::open(db_path).expect("should open sqlite db");
+    connection
+        .query_row(
+            "SELECT legacy_message_secrets_migration_done
+            FROM openmls_epoch_migration_state
+            WHERE provider_version = ?1",
+            params![STORAGE_PROVIDER_VERSION],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .expect("should query epoch migration state")
+        .unwrap_or(0)
+        != 0
+}
+
+fn set_legacy_message_secrets_migration_done(db_path: &str, done: bool) {
+    let connection = Connection::open(db_path).expect("should open sqlite db");
+    connection
+        .execute(
+            "INSERT INTO openmls_epoch_migration_state
+                (provider_version, legacy_message_secrets_migration_done)
+            VALUES (?1, ?2)
+            ON CONFLICT(provider_version) DO UPDATE SET
+                legacy_message_secrets_migration_done = excluded.legacy_message_secrets_migration_done",
+            params![STORAGE_PROVIDER_VERSION, i64::from(done)],
+        )
+        .expect("should update epoch migration state");
+}
+
+fn load_legacy_message_secrets_row(db_path: &str, group_id: &GroupId) -> Vec<u8> {
+    let connection = Connection::open(db_path).expect("should open sqlite db");
+    let group_id_blob = serde_json::to_vec(group_id).expect("should serialize group id");
+    connection
+        .query_row(
+            "SELECT group_data
+            FROM openmls_group_data
+            WHERE provider_version = ?1
+                AND group_id = ?2
+                AND data_type = 'message_secrets'",
+            params![STORAGE_PROVIDER_VERSION, group_id_blob],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .expect("should load legacy message secrets row")
+}
+
+fn insert_legacy_message_secrets_row(db_path: &str, group_id: &GroupId, group_data: &[u8]) {
+    let connection = Connection::open(db_path).expect("should open sqlite db");
+    let group_id_blob = serde_json::to_vec(group_id).expect("should serialize group id");
+    connection
+        .execute(
+            "INSERT INTO openmls_group_data (provider_version, group_id, data_type, group_data)
+            VALUES (?1, ?2, 'message_secrets', ?3)",
+            params![STORAGE_PROVIDER_VERSION, group_id_blob, group_data],
+        )
+        .expect("should insert legacy message secrets row");
+}
+
 fn count_legacy_message_secrets(provider: &SqliteProvider, group_id: &GroupId) -> i64 {
     let connection = provider
         .storage()
@@ -119,6 +252,22 @@ fn count_legacy_message_secrets(provider: &SqliteProvider, group_id: &GroupId) -
             |row| row.get::<_, i64>(0),
         )
         .expect("should count legacy message secrets")
+}
+
+fn count_legacy_message_secrets_in_db(db_path: &str, group_id: &GroupId) -> i64 {
+    let connection = Connection::open(db_path).expect("should open sqlite db");
+    let group_id_blob = serde_json::to_vec(group_id).expect("should serialize group id");
+    connection
+        .query_row(
+            "SELECT COUNT(*)
+            FROM openmls_group_data
+            WHERE provider_version = ?1
+                AND group_id = ?2
+                AND data_type = 'message_secrets'",
+            params![STORAGE_PROVIDER_VERSION, group_id_blob],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("should count legacy message secrets from db path")
 }
 
 fn delete_epoch_message_secrets(provider: &SqliteProvider, group_id: &GroupId, epoch: u64) {
@@ -176,17 +325,18 @@ fn epoch_migration_creates_schema_for_empty_db() {
         .expect("should get sqlite connection");
 
     assert!(table_exists(&connection, "openmls_group_data"));
-    assert!(!table_exists(&connection, "openmls_epoch_migration_state"));
-    assert!(table_exists(&connection, "openmls_group_epoch_meta"));
+    assert!(table_exists(&connection, "openmls_epoch_migration_state"));
+    assert!(!table_exists(&connection, "openmls_group_epoch_meta"));
     assert!(table_exists(
         &connection,
         "openmls_group_epoch_message_secrets"
     ));
-    assert_eq!(count_rows(&connection, "openmls_group_epoch_meta"), 0);
+    assert_eq!(count_rows(&connection, "openmls_epoch_migration_state"), 1);
     assert_eq!(
         count_rows(&connection, "openmls_group_epoch_message_secrets"),
         0
     );
+    assert!(legacy_message_secrets_migration_done(&db_path_str));
 
     let _ = fs::remove_file(db_path);
 }
@@ -222,6 +372,7 @@ fn new_groups_are_persisted_as_epoch_message_secrets_only() {
             .is_some()
     );
     assert_eq!(count_legacy_message_secrets(&provider, &group_id), 0);
+    assert!(legacy_message_secrets_migration_done(&db_path_str));
 
     let reopened_provider =
         SqliteProvider::new(&db_path_str, &None).expect("should reopen epoch-only db");
@@ -254,6 +405,200 @@ fn epoch_only_groups_are_not_listed_as_pending_migration() {
     assert!(pending_groups.is_empty());
 
     let _ = fs::remove_file(db_path);
+}
+
+#[test]
+fn reopen_backfills_legacy_group_and_removes_legacy_row() {
+    let db_path = temp_db_path();
+    let db_path_str = db_path.to_string_lossy().into_owned();
+
+    let legacy_provider = LegacyProvider::new(&db_path_str);
+    create_group_with_provider(&legacy_provider, "alice", "backfill-cleanup-group", 5);
+    advance_group_epoch(&legacy_provider, "backfill-cleanup-group");
+
+    let group_id = GroupId::from_slice(b"backfill-cleanup-group");
+    assert!(
+        count_legacy_message_secrets_in_db(&db_path_str, &group_id) > 0,
+        "legacy provider should leave message_secrets row for backfill"
+    );
+
+    let provider = SqliteProvider::new(&db_path_str, &None).expect("should reopen provider");
+    assert!(
+        provider
+            .storage()
+            .is_group_epoch_message_secrets_migrated(&group_id)
+            .expect("should read migrated flag after backfill")
+    );
+    assert!(
+        provider
+            .storage()
+            .load_group_epoch_message_secrets(&group_id, 1)
+            .expect("should load migrated current epoch row")
+            .is_some()
+    );
+    assert_eq!(
+        count_legacy_message_secrets(&provider, &group_id),
+        0,
+        "backfill should clean up legacy message_secrets row"
+    );
+    assert!(legacy_message_secrets_migration_done(&db_path_str));
+    let reopened_provider =
+        SqliteProvider::new(&db_path_str, &None).expect("should reopen provider again after cleanup");
+    assert!(
+        reopened_provider
+            .storage()
+            .load_group_epoch_message_secrets(&group_id, 1)
+            .expect("second reopen should still load migrated current epoch row")
+            .is_some()
+    );
+
+    let _ = fs::remove_file(db_path);
+}
+
+#[test]
+fn reopen_cleans_up_lingering_legacy_row_for_already_migrated_group() {
+    let db_path = temp_db_path();
+    let db_path_str = db_path.to_string_lossy().into_owned();
+
+    let legacy_provider = LegacyProvider::new(&db_path_str);
+    create_group_with_provider(&legacy_provider, "alice", "already-migrated-cleanup-group", 5);
+    advance_group_epoch(&legacy_provider, "already-migrated-cleanup-group");
+
+    let group_id = GroupId::from_slice(b"already-migrated-cleanup-group");
+    let legacy_row = load_legacy_message_secrets_row(&db_path_str, &group_id);
+    drop(legacy_provider);
+
+    let provider = SqliteProvider::new(&db_path_str, &None).expect("should backfill provider");
+    assert_eq!(count_legacy_message_secrets(&provider, &group_id), 0);
+    drop(provider);
+
+    insert_legacy_message_secrets_row(&db_path_str, &group_id, &legacy_row);
+    set_legacy_message_secrets_migration_done(&db_path_str, false);
+
+    let reopened_provider =
+        SqliteProvider::new(&db_path_str, &None).expect("should reopen provider for lingering cleanup");
+    assert!(
+        reopened_provider
+            .storage()
+            .is_group_epoch_message_secrets_migrated(&group_id)
+            .expect("should keep migrated flag true")
+    );
+    assert_eq!(
+        count_legacy_message_secrets(&reopened_provider, &group_id),
+        0,
+        "reopen should clean lingering legacy row even when group is already marked migrated"
+    );
+    assert!(legacy_message_secrets_migration_done(&db_path_str));
+
+    let _ = fs::remove_file(db_path);
+}
+
+#[test]
+fn application_and_operation_messages_work_before_and_after_migration() {
+    let alice_db_path = temp_db_path();
+    let bob_db_path = temp_db_path();
+    let alice_db_path_str = alice_db_path.to_string_lossy().into_owned();
+    let bob_db_path_str = bob_db_path.to_string_lossy().into_owned();
+    let group_id = "wrapper-flow-migration-group";
+    let max_past_epochs = 5;
+
+    let alice_legacy = LegacyProvider::new(&alice_db_path_str);
+    let bob_legacy = LegacyProvider::new(&bob_db_path_str);
+
+    create_group_with_provider(&alice_legacy, "alice", group_id, max_past_epochs);
+    let bob_key_package =
+        core::generate_key_package("bob", &bob_legacy, DEFAULT_CIPHERSUITE, true, None)
+            .expect("should generate bob key package");
+
+    let mut alice_group = load_group(&alice_legacy, group_id, []).expect("should load alice group");
+    let alice_signer = group_signer(&alice_group, &alice_legacy).expect("should load alice signer");
+    let add_result = core::add_members(&mut alice_group, &alice_legacy, &alice_signer, &[bob_key_package])
+        .expect("should add bob");
+    merge_pending_commit(&mut alice_group, &alice_legacy).expect("should merge add commit");
+    core::process_welcome(&bob_legacy, &add_result.welcome, &join_config(max_past_epochs))
+        .expect("should process welcome");
+
+    let mut alice_group = load_group(&alice_legacy, group_id, []).expect("should reload alice group");
+    let alice_signer = group_signer(&alice_group, &alice_legacy).expect("should reload alice signer");
+    let legacy_plaintext = b"legacy application message".to_vec();
+    let legacy_encrypted = core::encrypt_message(
+        &mut alice_group,
+        &alice_legacy,
+        &alice_signer,
+        &legacy_plaintext,
+    )
+    .expect("should encrypt legacy application message");
+    let legacy_result = core::process_application_message_for_group(
+        &bob_legacy,
+        group_id,
+        &legacy_encrypted,
+    )
+    .expect("legacy receiver should decrypt application message");
+    assert_eq!(legacy_result.message, legacy_plaintext);
+
+    let mut alice_group = load_group(&alice_legacy, group_id, []).expect("should reload alice group");
+    let alice_signer = group_signer(&alice_group, &alice_legacy).expect("should reload alice signer");
+    let update = update_leaf_node(&mut alice_group, &alice_legacy, &alice_signer)
+        .expect("should create legacy commit");
+    merge_pending_commit(&mut alice_group, &alice_legacy).expect("should merge legacy commit");
+    core::process_operation_message_for_group(&bob_legacy, group_id, &update.commit)
+        .expect("legacy receiver should process commit");
+
+    drop(alice_legacy);
+    drop(bob_legacy);
+
+    let alice_current = SqliteProvider::new(&alice_db_path_str, &None)
+        .expect("should reopen alice with current provider");
+    let bob_current =
+        SqliteProvider::new(&bob_db_path_str, &None).expect("should reopen bob with current provider");
+    let group_id_obj = GroupId::from_slice(group_id.as_bytes());
+
+    assert!(
+        alice_current
+            .storage()
+            .is_group_epoch_message_secrets_migrated(&group_id_obj)
+            .expect("should read alice migration status")
+    );
+    assert!(
+        bob_current
+            .storage()
+            .is_group_epoch_message_secrets_migrated(&group_id_obj)
+            .expect("should read bob migration status")
+    );
+    assert_eq!(count_legacy_message_secrets(&alice_current, &group_id_obj), 0);
+    assert_eq!(count_legacy_message_secrets(&bob_current, &group_id_obj), 0);
+
+    let mut alice_group = load_group(&alice_current, group_id, []).expect("should load migrated alice group");
+    let alice_signer = group_signer(&alice_group, &alice_current).expect("should load migrated alice signer");
+    let migrated_plaintext = b"migrated application message".to_vec();
+    let migrated_encrypted = core::encrypt_message(
+        &mut alice_group,
+        &alice_current,
+        &alice_signer,
+        &migrated_plaintext,
+    )
+    .expect("should encrypt migrated application message");
+    let migrated_result = core::process_application_message_for_group(
+        &bob_current,
+        group_id,
+        &migrated_encrypted,
+    )
+    .expect("migrated receiver should decrypt application message");
+    assert_eq!(migrated_result.message, migrated_plaintext);
+
+    let mut alice_group = load_group(&alice_current, group_id, [])
+        .expect("should reload migrated alice group");
+    let alice_signer = group_signer(&alice_group, &alice_current)
+        .expect("should reload migrated alice signer");
+    let migrated_update = update_leaf_node(&mut alice_group, &alice_current, &alice_signer)
+        .expect("should create migrated commit");
+    merge_pending_commit(&mut alice_group, &alice_current)
+        .expect("should merge migrated commit");
+    core::process_operation_message_for_group(&bob_current, group_id, &migrated_update.commit)
+        .expect("migrated receiver should process commit");
+
+    let _ = fs::remove_file(alice_db_path);
+    let _ = fs::remove_file(bob_db_path);
 }
 
 #[test]

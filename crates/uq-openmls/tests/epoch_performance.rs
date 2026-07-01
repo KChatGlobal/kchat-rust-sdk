@@ -155,21 +155,7 @@ fn has_legacy_message_secrets(provider: &SqliteProvider, group_id: &str) -> bool
         != 0
 }
 
-fn force_legacy_load(provider: &SqliteProvider, group_id: &str) {
-    if !has_legacy_message_secrets(provider, group_id) {
-        return;
-    }
-    provider
-        .storage()
-        .mark_group_epoch_message_secrets_migrated(&to_group_id(group_id), false)
-        .expect("should force legacy group load");
-}
-
-fn after_mutation(provider: &SqliteProvider, mode: RuntimeMode, group_id: &str) {
-    if matches!(mode, RuntimeMode::Legacy) {
-        force_legacy_load(provider, group_id);
-    }
-}
+fn after_mutation(_provider: &SqliteProvider, _mode: RuntimeMode, _group_id: &str) {}
 
 fn load_group(
     provider: &SqliteProvider,
@@ -189,7 +175,6 @@ where
     Messages: IntoIterator<Item = &'a [u8]>,
 {
     if matches!(mode, RuntimeMode::Legacy) {
-        force_legacy_load(provider, group_id);
         return openmls::group::MlsGroup::load(provider.storage(), &to_group_id(group_id))
             .expect("should load full-window group")
             .expect("group should exist");

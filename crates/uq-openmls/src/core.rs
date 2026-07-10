@@ -146,8 +146,8 @@ pub struct AddMembersResult {
 /// This operation results in a Commit with a `path`, i.e. it includes an
 /// update of the committer's leaf [`KeyPackage`].
 ///
-/// If successful, it returns a tuple of [`MlsMessageOut`]s, where the first
-/// contains the commit, the second one the [`Welcome`].
+/// If successful, it returns serialized MLS messages, where the first contains
+/// the commit and the second contains the welcome message.
 pub fn add_members<Provider: OpenMlsProvider>(
     group: &mut MlsGroup,
     provider: &Provider,
@@ -203,8 +203,8 @@ pub fn add_members<Provider: OpenMlsProvider>(
 
 /// Processes welcome message
 ///
-/// Creates a new staged welcome from a [`Welcome`] message. Returns an error
-/// ([`WelcomeError::NoMatchingKeyPackage`]) if no [`KeyPackage`]
+/// Creates a new staged welcome from a welcome message. Returns an error
+/// (`WelcomeError::NoMatchingKeyPackage`) if no [`KeyPackage`]
 /// can be found.
 /// Then consumes the [`StagedWelcome`] and returns the respective [`MlsGroup`].
 pub fn process_welcome<Provider: OpenMlsProvider>(
@@ -272,7 +272,7 @@ pub struct ProcessOperationMessageResult {
 
 /// Processes operation message.
 ///
-/// - If the message is commit message, then merge a [`StagedCommit`] into the group after inspection.
+/// - If the message is commit message, then merge the staged commit into the group after inspection.
 ///   As this advances the epoch of the group, it also clears any pending commits.
 /// - If the message is proposal message, then creates a Commit message that covers the pending proposals.
 pub fn process_operation_message<Provider: OpenMlsProvider>(

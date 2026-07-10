@@ -27,8 +27,12 @@ fn test_add_member_and_encrypt_decrypte_message() {
     let (_, _, danny_key_package) = &init_members(&["danny"])[0];
 
     // Alice add Danny
-    let AddMembersResult { commit, .. } =
-        add_members(alice_provider, group_id, &[danny_key_package.clone()]).unwrap();
+    let AddMembersResult { commit, .. } = add_members(
+        alice_provider,
+        group_id,
+        std::slice::from_ref(danny_key_package),
+    )
+    .unwrap();
     merge_pending_commit(alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob and Charlie process commit (add Danny)
@@ -76,9 +80,12 @@ fn test_decrypte_message_at_old_epoch() {
     let (_, _, charlie_key_package) = &init_members(&["charlie"])[0];
 
     // Alice Add Charlie => epoch advances
-    let AddMembersResult { commit, .. } =
-        add_members(alice_provider, group_id, &[charlie_key_package.clone()])
-            .expect("should add Charlie success");
+    let AddMembersResult { commit, .. } = add_members(
+        alice_provider,
+        group_id,
+        std::slice::from_ref(charlie_key_package),
+    )
+    .expect("should add Charlie success");
     merge_pending_commit(alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob process commit (add Charlie)
@@ -118,9 +125,12 @@ fn test_decrypte_message_at_old_epoch_with_max_past_epochs_config() {
     let (_, _, danny_key_package) = &members[1];
 
     // Alice Add Charlie => epoch advances
-    let AddMembersResult { commit, .. } =
-        add_members(alice_provider, group_id, &[charlie_key_package.clone()])
-            .expect("should add Charlie success");
+    let AddMembersResult { commit, .. } = add_members(
+        alice_provider,
+        group_id,
+        std::slice::from_ref(charlie_key_package),
+    )
+    .expect("should add Charlie success");
     merge_pending_commit(alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob process commit (add Charlie)
@@ -155,9 +165,12 @@ fn test_decrypte_message_at_old_epoch_with_max_past_epochs_config() {
     assert_eq!(alice_raw_msg_2.as_bytes(), result.message);
 
     // Alice Add Danny => epoch advances
-    let AddMembersResult { commit, .. } =
-        add_members(alice_provider, group_id, &[danny_key_package.clone()])
-            .expect("should add Danny success");
+    let AddMembersResult { commit, .. } = add_members(
+        alice_provider,
+        group_id,
+        std::slice::from_ref(danny_key_package),
+    )
+    .expect("should add Danny success");
     merge_pending_commit(alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob process commit (add Danny)

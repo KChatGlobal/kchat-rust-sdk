@@ -176,10 +176,10 @@ impl SqliteProvider {
     }
 
     fn migrate_epoch_message_secrets(&self, log: Option<&dyn Fn(String)>) {
-        if let Err(err) = self.try_migrate_epoch_message_secrets(log) {
-            if let Some(log) = log {
-                log(format!("epoch message secrets migration error err={}", err));
-            }
+        if let Err(err) = self.try_migrate_epoch_message_secrets(log)
+            && let Some(log) = log
+        {
+            log(format!("epoch message secrets migration error err={}", err));
         }
     }
 

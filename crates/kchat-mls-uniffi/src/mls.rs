@@ -442,6 +442,7 @@ pub struct ProcessAllMessagesResult {
 #[uniffi::export]
 impl UqMls {
     #[uniffi::constructor]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         client_id: String,
         storage_path: String,
@@ -506,7 +507,7 @@ impl UqMls {
     }
 
     pub fn create_group(&self, group_id: &str, public_key: Option<Vec<u8>>) -> Result<(), Error> {
-        if let Ok(_) = core::group(&self.provider, group_id, []) {
+        if core::group(&self.provider, group_id, []).is_ok() {
             return Err(Error::GroupIsAlreadyExisted);
         }
 
@@ -578,13 +579,13 @@ impl UqMls {
         member_ids: &[String],
         key_packages: &[Vec<u8>],
     ) -> Result<ReAddResult, Error> {
-        if let Some(op) = get_group_pending_operation(&self.conn, group_id).unwrap_or(None) {
-            if !op.eq(OP_NONE) {
-                return Err(Error::ReAdd(format!(
-                    "There is a pending operation: {}",
-                    op
-                )));
-            }
+        if let Some(op) = get_group_pending_operation(&self.conn, group_id).unwrap_or(None)
+            && !op.eq(OP_NONE)
+        {
+            return Err(Error::ReAdd(format!(
+                "There is a pending operation: {}",
+                op
+            )));
         }
 
         let result = self
@@ -655,8 +656,7 @@ impl UqMls {
     }
 
     pub fn process_welcome(&self, welcome: &[u8]) -> Result<(), Error> {
-        let _ = self
-            .provider
+        self.provider
             .transaction(|tx_provider| {
                 core::process_welcome(
                     tx_provider,
@@ -1131,10 +1131,10 @@ impl UqMls {
         let members = group
             .members()
             .filter_map(|member| {
-                if let Ok(credential) = BasicCredential::try_from(member.credential) {
-                    if let Ok(member_id) = String::from_utf8(credential.identity().to_vec()) {
-                        return Some(member_id);
-                    }
+                if let Ok(credential) = BasicCredential::try_from(member.credential)
+                    && let Ok(member_id) = String::from_utf8(credential.identity().to_vec())
+                {
+                    return Some(member_id);
                 }
 
                 None

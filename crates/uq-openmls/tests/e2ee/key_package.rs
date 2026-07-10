@@ -37,9 +37,12 @@ fn test_key_package_last_resort() {
     .expect("should create group success");
 
     // Alice add Bob to group 1
-    let AddMembersResult { welcome, .. } =
-        add_members(&alice_provider, group_1_id, &[bob_key_package.clone()])
-            .expect("should add Bob to group success");
+    let AddMembersResult { welcome, .. } = add_members(
+        &alice_provider,
+        group_1_id,
+        std::slice::from_ref(&bob_key_package),
+    )
+    .expect("should add Bob to group success");
     merge_pending_commit(&alice_provider, group_1_id).expect("should merge pending commit success");
 
     // Bob process welcome of group 1

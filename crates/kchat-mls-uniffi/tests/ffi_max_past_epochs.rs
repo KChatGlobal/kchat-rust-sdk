@@ -66,8 +66,8 @@ fn generate_one_key_package(client: &UqMls) -> Vec<u8> {
 ///     1. encrypts an application message at the current epoch,
 ///     2. commits a tree-changing operation (alternating remove C / add C),
 ///        which advances the epoch by one,
-///   repeating until A has produced 100 messages spread over 100 distinct
-///   epochs.
+///        repeating until A has produced 100 messages spread over 100 distinct
+///        epochs.
 /// - B is kept "behind" during the loop (it never decrypts the application
 ///   messages as they come, nor processes the intermediate commits).
 /// - After the loop, B processes all 99 commits in order, advancing B's epoch

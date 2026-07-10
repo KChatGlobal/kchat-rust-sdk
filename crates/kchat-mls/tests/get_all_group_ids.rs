@@ -108,7 +108,7 @@ fn test_get_all_group_ids_multiple_groups() {
                 )?;
                 Ok(())
             })
-            .expect(&format!("should create group {}", group_id));
+            .unwrap_or_else(|_| panic!("should create group {}", group_id));
     }
 
     let group_ids = get_all_group_ids(&provider);

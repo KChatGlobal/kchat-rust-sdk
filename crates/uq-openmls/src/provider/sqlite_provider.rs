@@ -189,7 +189,10 @@ impl SqliteProvider {
                 log(msg);
             }
         };
-        if self.mls_storage.is_legacy_message_secrets_migration_done()? {
+        if self
+            .mls_storage
+            .is_legacy_message_secrets_migration_done()?
+        {
             emit("epoch message secrets migration skipped state=done".to_owned());
             return Ok(());
         }

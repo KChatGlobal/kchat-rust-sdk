@@ -442,8 +442,8 @@ fn reopen_backfills_legacy_group_and_removes_legacy_row() {
         "backfill should clean up legacy message_secrets row"
     );
     assert!(legacy_message_secrets_migration_done(&db_path_str));
-    let reopened_provider =
-        SqliteProvider::new(&db_path_str, &None).expect("should reopen provider again after cleanup");
+    let reopened_provider = SqliteProvider::new(&db_path_str, &None)
+        .expect("should reopen provider again after cleanup");
     assert!(
         reopened_provider
             .storage()
@@ -461,7 +461,12 @@ fn reopen_cleans_up_lingering_legacy_row_for_already_migrated_group() {
     let db_path_str = db_path.to_string_lossy().into_owned();
 
     let legacy_provider = LegacyProvider::new(&db_path_str);
-    create_group_with_provider(&legacy_provider, "alice", "already-migrated-cleanup-group", 5);
+    create_group_with_provider(
+        &legacy_provider,
+        "alice",
+        "already-migrated-cleanup-group",
+        5,
+    );
     advance_group_epoch(&legacy_provider, "already-migrated-cleanup-group");
 
     let group_id = GroupId::from_slice(b"already-migrated-cleanup-group");
@@ -475,8 +480,8 @@ fn reopen_cleans_up_lingering_legacy_row_for_already_migrated_group() {
     insert_legacy_message_secrets_row(&db_path_str, &group_id, &legacy_row);
     set_legacy_message_secrets_migration_done(&db_path_str, false);
 
-    let reopened_provider =
-        SqliteProvider::new(&db_path_str, &None).expect("should reopen provider for lingering cleanup");
+    let reopened_provider = SqliteProvider::new(&db_path_str, &None)
+        .expect("should reopen provider for lingering cleanup");
     assert!(
         reopened_provider
             .storage()
@@ -512,14 +517,25 @@ fn application_and_operation_messages_work_before_and_after_migration() {
 
     let mut alice_group = load_group(&alice_legacy, group_id, []).expect("should load alice group");
     let alice_signer = group_signer(&alice_group, &alice_legacy).expect("should load alice signer");
-    let add_result = core::add_members(&mut alice_group, &alice_legacy, &alice_signer, &[bob_key_package])
-        .expect("should add bob");
+    let add_result = core::add_members(
+        &mut alice_group,
+        &alice_legacy,
+        &alice_signer,
+        &[bob_key_package],
+    )
+    .expect("should add bob");
     merge_pending_commit(&mut alice_group, &alice_legacy).expect("should merge add commit");
-    core::process_welcome(&bob_legacy, &add_result.welcome, &join_config(max_past_epochs))
-        .expect("should process welcome");
+    core::process_welcome(
+        &bob_legacy,
+        &add_result.welcome,
+        &join_config(max_past_epochs),
+    )
+    .expect("should process welcome");
 
-    let mut alice_group = load_group(&alice_legacy, group_id, []).expect("should reload alice group");
-    let alice_signer = group_signer(&alice_group, &alice_legacy).expect("should reload alice signer");
+    let mut alice_group =
+        load_group(&alice_legacy, group_id, []).expect("should reload alice group");
+    let alice_signer =
+        group_signer(&alice_group, &alice_legacy).expect("should reload alice signer");
     let legacy_plaintext = b"legacy application message".to_vec();
     let legacy_encrypted = core::encrypt_message(
         &mut alice_group,
@@ -528,16 +544,15 @@ fn application_and_operation_messages_work_before_and_after_migration() {
         &legacy_plaintext,
     )
     .expect("should encrypt legacy application message");
-    let legacy_result = core::process_application_message_for_group(
-        &bob_legacy,
-        group_id,
-        &legacy_encrypted,
-    )
-    .expect("legacy receiver should decrypt application message");
+    let legacy_result =
+        core::process_application_message_for_group(&bob_legacy, group_id, &legacy_encrypted)
+            .expect("legacy receiver should decrypt application message");
     assert_eq!(legacy_result.message, legacy_plaintext);
 
-    let mut alice_group = load_group(&alice_legacy, group_id, []).expect("should reload alice group");
-    let alice_signer = group_signer(&alice_group, &alice_legacy).expect("should reload alice signer");
+    let mut alice_group =
+        load_group(&alice_legacy, group_id, []).expect("should reload alice group");
+    let alice_signer =
+        group_signer(&alice_group, &alice_legacy).expect("should reload alice signer");
     let update = update_leaf_node(&mut alice_group, &alice_legacy, &alice_signer)
         .expect("should create legacy commit");
     merge_pending_commit(&mut alice_group, &alice_legacy).expect("should merge legacy commit");
@@ -549,8 +564,8 @@ fn application_and_operation_messages_work_before_and_after_migration() {
 
     let alice_current = SqliteProvider::new(&alice_db_path_str, &None)
         .expect("should reopen alice with current provider");
-    let bob_current =
-        SqliteProvider::new(&bob_db_path_str, &None).expect("should reopen bob with current provider");
+    let bob_current = SqliteProvider::new(&bob_db_path_str, &None)
+        .expect("should reopen bob with current provider");
     let group_id_obj = GroupId::from_slice(group_id.as_bytes());
 
     assert!(
@@ -565,11 +580,16 @@ fn application_and_operation_messages_work_before_and_after_migration() {
             .is_group_epoch_message_secrets_migrated(&group_id_obj)
             .expect("should read bob migration status")
     );
-    assert_eq!(count_legacy_message_secrets(&alice_current, &group_id_obj), 0);
+    assert_eq!(
+        count_legacy_message_secrets(&alice_current, &group_id_obj),
+        0
+    );
     assert_eq!(count_legacy_message_secrets(&bob_current, &group_id_obj), 0);
 
-    let mut alice_group = load_group(&alice_current, group_id, []).expect("should load migrated alice group");
-    let alice_signer = group_signer(&alice_group, &alice_current).expect("should load migrated alice signer");
+    let mut alice_group =
+        load_group(&alice_current, group_id, []).expect("should load migrated alice group");
+    let alice_signer =
+        group_signer(&alice_group, &alice_current).expect("should load migrated alice signer");
     let migrated_plaintext = b"migrated application message".to_vec();
     let migrated_encrypted = core::encrypt_message(
         &mut alice_group,
@@ -578,22 +598,18 @@ fn application_and_operation_messages_work_before_and_after_migration() {
         &migrated_plaintext,
     )
     .expect("should encrypt migrated application message");
-    let migrated_result = core::process_application_message_for_group(
-        &bob_current,
-        group_id,
-        &migrated_encrypted,
-    )
-    .expect("migrated receiver should decrypt application message");
+    let migrated_result =
+        core::process_application_message_for_group(&bob_current, group_id, &migrated_encrypted)
+            .expect("migrated receiver should decrypt application message");
     assert_eq!(migrated_result.message, migrated_plaintext);
 
-    let mut alice_group = load_group(&alice_current, group_id, [])
-        .expect("should reload migrated alice group");
-    let alice_signer = group_signer(&alice_group, &alice_current)
-        .expect("should reload migrated alice signer");
+    let mut alice_group =
+        load_group(&alice_current, group_id, []).expect("should reload migrated alice group");
+    let alice_signer =
+        group_signer(&alice_group, &alice_current).expect("should reload migrated alice signer");
     let migrated_update = update_leaf_node(&mut alice_group, &alice_current, &alice_signer)
         .expect("should create migrated commit");
-    merge_pending_commit(&mut alice_group, &alice_current)
-        .expect("should merge migrated commit");
+    merge_pending_commit(&mut alice_group, &alice_current).expect("should merge migrated commit");
     core::process_operation_message_for_group(&bob_current, group_id, &migrated_update.commit)
         .expect("migrated receiver should process commit");
 

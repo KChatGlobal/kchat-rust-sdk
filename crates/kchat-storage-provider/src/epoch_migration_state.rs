@@ -19,7 +19,9 @@ impl StorableEpochMigrationState {
             WHERE provider_version = ?1",
         )?;
         let done = stmt
-            .query_row(params![STORAGE_PROVIDER_VERSION], |row| row.get::<_, i64>(0))
+            .query_row(params![STORAGE_PROVIDER_VERSION], |row| {
+                row.get::<_, i64>(0)
+            })
             .optional()?
             .unwrap_or(0);
         Ok(done != 0)
@@ -34,7 +36,9 @@ impl StorableEpochMigrationState {
             WHERE provider_version = ?1",
         )?;
         let done = stmt
-            .query_row(params![STORAGE_PROVIDER_VERSION], |row| row.get::<_, i64>(0))
+            .query_row(params![STORAGE_PROVIDER_VERSION], |row| {
+                row.get::<_, i64>(0)
+            })
             .optional()?
             .unwrap_or(0);
         Ok(done != 0)
@@ -74,7 +78,9 @@ impl StorableEpochMigrationState {
 
 impl<C: Codec> SqliteStorageProvider<C> {
     pub fn is_legacy_message_secrets_migration_done(&self) -> Result<bool, rusqlite::Error> {
-        StorableEpochMigrationState::is_legacy_message_secrets_migration_done(&self.connection_pool())
+        StorableEpochMigrationState::is_legacy_message_secrets_migration_done(
+            &self.connection_pool(),
+        )
     }
 
     pub fn mark_legacy_message_secrets_migration_done(

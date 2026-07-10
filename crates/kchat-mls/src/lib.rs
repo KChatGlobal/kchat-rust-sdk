@@ -386,7 +386,7 @@ pub fn process_all_messages(
                         }
                     } else {
                         if let Some(msg) = first_message {
-                            if !own_member_id.contains(&msg.sender) {
+                            if !sender_matches_member_id(&own_member_id, &msg.sender) {
                                 provider
                                     .transaction(|tx_provider| {
                                         let mut tx_group = group(tx_provider, group_id, [])?;
@@ -427,7 +427,7 @@ pub fn process_all_messages(
                 }
                 GroupPendingOperation::UpdateTree => {
                     if let Some(msg) = first_message {
-                        if !own_member_id.contains(&msg.sender) {
+                        if !sender_matches_member_id(&own_member_id, &msg.sender) {
                             mls_group = Some(
                                 provider
                                     .transaction(|tx_provider| {
@@ -814,6 +814,17 @@ fn own_id_from_leaf_node(group: &MlsGroup) -> Option<String> {
     None
 }
 
+fn sender_matches_member_id(member_id: &str, sender: &str) -> bool {
+    if sender.is_empty() {
+        return false;
+    }
+
+    member_id == sender
+        || member_id
+            .split_once('/')
+            .is_some_and(|(_, fingerprint)| fingerprint == sender)
+}
+
 fn id_from_credential(cred: &Credential) -> Option<String> {
     if let Ok(basic_cred) = BasicCredential::try_from(cred.to_owned()) {
         if let Ok(id) = String::from_utf8(basic_cred.identity().to_vec()) {
@@ -883,4 +894,27 @@ pub fn get_all_group_ids(provider: &SqliteProvider) -> Vec<String> {
     }
 
     group_ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sender_matches_member_id;
+
+    #[test]
+    fn sender_matches_full_member_id_or_exact_fingerprint() {
+        let member_id = "alice@example.com/device-fingerprint";
+
+        assert!(sender_matches_member_id(member_id, member_id));
+        assert!(sender_matches_member_id(member_id, "device-fingerprint"));
+    }
+
+    #[test]
+    fn sender_rejects_partial_or_empty_matches() {
+        let member_id = "alice@example.com/device-fingerprint";
+
+        assert!(!sender_matches_member_id(member_id, "alice@example.com"));
+        assert!(!sender_matches_member_id(member_id, "device"));
+        assert!(!sender_matches_member_id(member_id, "fingerprint"));
+        assert!(!sender_matches_member_id(member_id, ""));
+    }
 }

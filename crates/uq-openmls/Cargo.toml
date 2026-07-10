@@ -23,7 +23,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 secrecy = { workspace = true }
 
+[features]
+extensions-draft-08 = [
+    "openmls/extensions-draft-08",
+    "kchat_storage_provider/extensions-draft-08",
+    "openmls_sqlite_storage/extensions-draft-08",
+]
+
 [dev-dependencies]
 openmls = { workspace = true, features = ["fork-resolution", "libcrux-provider", "test-utils"] }
 criterion = { workspace = true }
-openmls_sqlite_storage = { git = "ssh://git@github.com/KChatGlobal/openmls.git", branch = "main" }
+openmls_sqlite_storage = { git = "https://github.com:443/KChatGlobal/openmls.git", branch = "main" }

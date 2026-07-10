@@ -146,8 +146,8 @@ pub struct AddMembersResult {
 /// This operation results in a Commit with a `path`, i.e. it includes an
 /// update of the committer's leaf [`KeyPackage`].
 ///
-/// If successful, it returns a tuple of [`MlsMessageOut`]s, where the first
-/// contains the commit, the second one the [`Welcome`].
+/// If successful, it returns serialized MLS messages, where the first contains
+/// the commit and the second contains the welcome message.
 pub fn add_members<Provider: OpenMlsProvider>(
     group: &mut MlsGroup,
     provider: &Provider,
@@ -203,8 +203,8 @@ pub fn add_members<Provider: OpenMlsProvider>(
 
 /// Processes welcome message
 ///
-/// Creates a new staged welcome from a [`Welcome`] message. Returns an error
-/// ([`WelcomeError::NoMatchingKeyPackage`]) if no [`KeyPackage`]
+/// Creates a new staged welcome from a welcome message. Returns an error
+/// (`WelcomeError::NoMatchingKeyPackage`) if no [`KeyPackage`]
 /// can be found.
 /// Then consumes the [`StagedWelcome`] and returns the respective [`MlsGroup`].
 pub fn process_welcome<Provider: OpenMlsProvider>(
@@ -272,7 +272,7 @@ pub struct ProcessOperationMessageResult {
 
 /// Processes operation message.
 ///
-/// - If the message is commit message, then merge a [`StagedCommit`] into the group after inspection.
+/// - If the message is commit message, then merge the staged commit into the group after inspection.
 ///   As this advances the epoch of the group, it also clears any pending commits.
 /// - If the message is proposal message, then creates a Commit message that covers the pending proposals.
 pub fn process_operation_message<Provider: OpenMlsProvider>(
@@ -426,8 +426,8 @@ pub fn process_proposal_message<Provider: OpenMlsProvider>(
         processed_message.into_content()
     {
         let proposal: Proposal = staged_proposal.proposal().into();
-        if let Sender::Member(member_leaf_node) = staged_proposal.sender() {
-            if let Some(queued_proposal) = group
+        if let Sender::Member(member_leaf_node) = staged_proposal.sender()
+            && let Some(queued_proposal) = group
                 .member(*member_leaf_node)
                 .and_then(|credential| BasicCredential::try_from(credential.to_owned()).ok())
                 .and_then(|credential| String::from_utf8(credential.identity().to_vec()).ok())
@@ -437,9 +437,8 @@ pub fn process_proposal_message<Provider: OpenMlsProvider>(
                     sender: identity,
                     epoch,
                 })
-            {
-                return Ok(queued_proposal);
-            }
+        {
+            return Ok(queued_proposal);
         }
     }
 
@@ -552,15 +551,13 @@ pub fn join_by_external_commit<Provider: OpenMlsProvider>(
         ratchet_tree_extension.ratchet_tree().to_owned(),
         verifiable_group_info.clone(),
         ProposalStore::new(),
-    ) {
-        if !find_members_by_identity(
-            &public_group.members().collect::<Vec<Member>>(),
-            &[user_id.as_bytes()],
-        )
-        .is_empty()
-        {
-            return Err(Error::CredentialIsExisted);
-        }
+    ) && !find_members_by_identity(
+        &public_group.members().collect::<Vec<Member>>(),
+        &[user_id.as_bytes()],
+    )
+    .is_empty()
+    {
+        return Err(Error::CredentialIsExisted);
     }
 
     let (credential_with_key, signer) =
@@ -742,7 +739,11 @@ impl From<&MlsProposal> for Proposal {
             OpenMlsProposal::ReInit(_) => Self::ReInit,
             OpenMlsProposal::ExternalInit(_) => Self::ExternalInit,
             OpenMlsProposal::GroupContextExtensions(_) => Self::GroupContextExtensions,
+            #[cfg(feature = "extensions-draft-08")]
+            OpenMlsProposal::AppDataUpdate(_) => Self::Custom,
             OpenMlsProposal::SelfRemove => Self::SelfRemove,
+            #[cfg(feature = "extensions-draft-08")]
+            OpenMlsProposal::AppEphemeral(_) => Self::Custom,
             OpenMlsProposal::Custom(_) => Self::Custom,
         }
     }
@@ -857,11 +858,11 @@ pub fn group_context<Provider: OpenMlsProvider>(
     provider: &Provider,
     group_id: &str,
 ) -> Result<GroupContext, Error> {
-    Ok(provider
+    provider
         .storage()
         .group_context(&GroupId::from_slice(group_id.as_bytes()))
         .map_err(|e| Error::Storage(e.to_string()))?
-        .ok_or(Error::GroupIsNotExisted)?)
+        .ok_or(Error::GroupIsNotExisted)
 }
 
 /// Delete group

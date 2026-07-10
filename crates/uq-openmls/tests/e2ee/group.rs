@@ -297,9 +297,12 @@ fn test_process_commit_wrong_order() {
     .expect("should create group success");
 
     // Alice add Bob
-    let AddMembersResult { welcome, .. } =
-        add_members(alice_provider, group_id, &[bob_key_package.clone()])
-            .expect("should add bob success and return `commit` and `welcome`");
+    let AddMembersResult { welcome, .. } = add_members(
+        alice_provider,
+        group_id,
+        std::slice::from_ref(bob_key_package),
+    )
+    .expect("should add bob success and return `commit` and `welcome`");
     merge_pending_commit(alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob process welcome
@@ -313,16 +316,24 @@ fn test_process_commit_wrong_order() {
     .expect("should process `welcome` success");
 
     // Alice add Charlie
-    let _ = add_members(alice_provider, group_id, &[charlie_key_package.clone()])
-        .expect("should add charlie success and return `commit` and `welcome`");
+    let _ = add_members(
+        alice_provider,
+        group_id,
+        std::slice::from_ref(charlie_key_package),
+    )
+    .expect("should add charlie success and return `commit` and `welcome`");
     merge_pending_commit(alice_provider, group_id).expect("should merge pending commit success");
 
     // Alice add Danny
     let AddMembersResult {
         commit: add_danny_commit,
         ..
-    } = add_members(alice_provider, group_id, &[danny_key_package.clone()])
-        .expect("should add danny success and return `commit` and `welcome`");
+    } = add_members(
+        alice_provider,
+        group_id,
+        std::slice::from_ref(danny_key_package),
+    )
+    .expect("should add danny success and return `commit` and `welcome`");
     merge_pending_commit(alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob process commit (add charlie)
@@ -432,7 +443,7 @@ fn test_external_join_from_existed_user() {
         None,
     );
 
-    assert!(matches!(result, Ok(_)));
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -512,11 +523,11 @@ fn test_re_join_after_leave_group() {
     .expect("should load group from storage success")
     .expect("should be returned Option::Some");
 
-    assert_eq!(bob_group.is_active(), false);
+    assert!(!bob_group.is_active());
 
     // Bob regenerate key package
     let bob_key_package =
-        generate_key_package(&bob_id, bob_provider, DEFAULT_CIPHERSUITE, true, None).unwrap();
+        generate_key_package(bob_id, bob_provider, DEFAULT_CIPHERSUITE, true, None).unwrap();
 
     // Alice add Bob to group again
     let result = add_members(alice_provider, group_id, &[bob_key_package]).unwrap();
@@ -538,7 +549,7 @@ fn test_re_join_after_leave_group() {
     .expect("should load group from storage success")
     .expect("should be returned Option::Some");
 
-    assert_eq!(bob_group.is_active(), true);
+    assert!(bob_group.is_active());
 }
 
 #[test]
@@ -607,7 +618,11 @@ fn test_leave_group() {
     assert_eq!(bob_group.members().count(), 1);
 
     // Alice try to add Charlie after leave group.
-    let result = add_members(alice_provider, group_id, &[charlie_key_package.clone()]);
+    let result = add_members(
+        alice_provider,
+        group_id,
+        std::slice::from_ref(charlie_key_package),
+    );
 
     assert!(matches!(result, Err(Error::MissingOwnLeafNodeInGroup)));
 }
@@ -687,9 +702,12 @@ fn test_readd() {
     .expect("should create group success");
 
     // Alice add Bob
-    let AddMembersResult { welcome, .. } =
-        add_members(&alice_provider, group_id, &[bob_key_package.clone()])
-            .expect("should add Bob to group success");
+    let AddMembersResult { welcome, .. } = add_members(
+        &alice_provider,
+        group_id,
+        std::slice::from_ref(&bob_key_package),
+    )
+    .expect("should add Bob to group success");
     merge_pending_commit(&alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob process welcome
@@ -741,9 +759,12 @@ fn test_readd() {
     .expect("should generate key package success");
 
     // Alice add Charlie
-    let AddMembersResult { .. } =
-        add_members(&alice_provider, group_id, &[charlie_key_package.clone()])
-            .expect("should add charlie to group success");
+    let AddMembersResult { .. } = add_members(
+        &alice_provider,
+        group_id,
+        std::slice::from_ref(&charlie_key_package),
+    )
+    .expect("should add charlie to group success");
     merge_pending_commit(&alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob add Charlie
@@ -758,7 +779,7 @@ fn test_readd() {
         &alice_provider,
         group_id,
         &[bob_user_id],
-        &[bob_key_package.clone()],
+        std::slice::from_ref(&bob_key_package),
     )
     .unwrap();
     merge_pending_commit(&alice_provider, group_id).unwrap();
@@ -817,7 +838,7 @@ fn test_readd() {
         &alice_provider,
         group_id,
         &[danny_user_id],
-        &[danny_key_package.clone()],
+        std::slice::from_ref(&danny_key_package),
     )
     .unwrap();
     merge_pending_commit(&alice_provider, group_id).unwrap();
@@ -914,10 +935,10 @@ fn test_readd() {
         alice_group
             .members()
             .filter_map(|member| {
-                if let Ok(credential) = BasicCredential::try_from(member.credential) {
-                    if let Ok(member_id) = String::from_utf8(credential.identity().to_vec()) {
-                        return Some(member_id);
-                    }
+                if let Ok(credential) = BasicCredential::try_from(member.credential)
+                    && let Ok(member_id) = String::from_utf8(credential.identity().to_vec())
+                {
+                    return Some(member_id);
                 }
 
                 None
@@ -957,10 +978,10 @@ fn test_readd() {
         alice_group
             .members()
             .filter_map(|member| {
-                if let Ok(credential) = BasicCredential::try_from(member.credential) {
-                    if let Ok(member_id) = String::from_utf8(credential.identity().to_vec()) {
-                        return Some(member_id);
-                    }
+                if let Ok(credential) = BasicCredential::try_from(member.credential)
+                    && let Ok(member_id) = String::from_utf8(credential.identity().to_vec())
+                {
+                    return Some(member_id);
                 }
 
                 None
@@ -1035,9 +1056,12 @@ fn test_key_package_lifetime() {
     .expect("should create group success");
 
     // Alice add Bob
-    let AddMembersResult { welcome, .. } =
-        add_members(&alice_provider, group_id, &[bob_key_package.clone()])
-            .expect("should add Bob to group success");
+    let AddMembersResult { welcome, .. } = add_members(
+        &alice_provider,
+        group_id,
+        std::slice::from_ref(&bob_key_package),
+    )
+    .expect("should add Bob to group success");
     merge_pending_commit(&alice_provider, group_id).expect("should merge pending commit success");
 
     // Bob process welcome

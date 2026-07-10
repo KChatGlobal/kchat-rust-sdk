@@ -1,13 +1,12 @@
 use std::{
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use openmls::group::{GroupId, MlsGroupCreateConfig, MlsGroupJoinConfig};
 use openmls_traits::OpenMlsProvider;
-use rusqlite::params;
 use uq_openmls::{
     core::{self, DEFAULT_CIPHERSUITE},
     provider::SqliteProvider,
@@ -95,7 +94,7 @@ fn temp_db_path(name: &str) -> PathBuf {
     ))
 }
 
-fn cleanup_sqlite_files(path: &PathBuf) {
+fn cleanup_sqlite_files(path: &Path) {
     let path = path.to_string_lossy();
     let _ = fs::remove_file(path.as_ref());
     let _ = fs::remove_file(format!("{path}-wal"));
@@ -126,33 +125,6 @@ fn join_config(max_past_epochs: usize) -> MlsGroupJoinConfig {
 
 fn to_group_id(group_id: &str) -> GroupId {
     GroupId::from_slice(group_id.as_bytes())
-}
-
-fn has_legacy_message_secrets(provider: &SqliteProvider, group_id: &str) -> bool {
-    let connection = provider
-        .storage()
-        .connection_pool()
-        .checkout()
-        .expect("should get sqlite connection");
-    let group_id_blob =
-        serde_json::to_vec(&to_group_id(group_id)).expect("should serialize group id");
-    connection
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1
-                FROM openmls_group_data
-                WHERE provider_version = ?1
-                    AND group_id = ?2
-                    AND data_type = 'message_secrets'
-            )",
-            params![
-                kchat_storage_provider::STORAGE_PROVIDER_VERSION,
-                group_id_blob
-            ],
-            |row| row.get::<_, i64>(0),
-        )
-        .expect("should check legacy message secrets")
-        != 0
 }
 
 fn after_mutation(_provider: &SqliteProvider, _mode: RuntimeMode, _group_id: &str) {}

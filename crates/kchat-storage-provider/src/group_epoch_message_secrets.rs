@@ -323,7 +323,6 @@ impl StorableGroupEpochMessageSecrets {
             tx, group_id,
         )?)
     }
-
 }
 
 impl<C: Codec> SqliteStorageProvider<C> {
@@ -331,7 +330,10 @@ impl<C: Codec> SqliteStorageProvider<C> {
         &self,
         group_id: &GroupId,
     ) -> Result<bool, rusqlite::Error> {
-        StorableGroupEpochMessageSecrets::is_migration_done::<C, _>(&self.connection_pool(), group_id)
+        StorableGroupEpochMessageSecrets::is_migration_done::<C, _>(
+            &self.connection_pool(),
+            group_id,
+        )
     }
 
     pub fn load_group_epoch_message_secrets<GroupId: Key<STORAGE_PROVIDER_VERSION>>(

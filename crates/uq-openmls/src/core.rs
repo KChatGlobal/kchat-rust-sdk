@@ -10,13 +10,15 @@ use openmls::{
         BasicCredential, Capabilities, Ciphersuite, ExtensionType, KeyPackage, KeyPackageIn,
         KeyPackageVerifyError, LeafNodeIndex, LeafNodeParameters, Lifetime, MlsMessageBodyIn,
         MlsMessageBodyOut, MlsMessageIn, ProcessedMessageContent, Proposal as OpenMlsProposal,
-        ProtocolMessage, ProtocolVersion, Sender,
+        ProtocolMessage, ProtocolVersion, RatchetTreeIn, Sender,
         group_info::VerifiableGroupInfo,
         tls_codec::{Deserialize as _, Serialize as _},
     },
 };
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_traits::{OpenMlsProvider, public_storage::PublicStorageProvider};
+use openmls_traits::{
+    OpenMlsProvider, crypto::OpenMlsCrypto, public_storage::PublicStorageProvider,
+};
 
 use crate::{
     error::Error,
@@ -57,11 +59,23 @@ pub fn group_signer<Provider: OpenMlsProvider>(
     get_own_signature_key_from_group(group, provider)
 }
 
+pub fn ensure_ciphersuite_supported<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    ciphersuite: Ciphersuite,
+) -> Result<(), Error> {
+    provider
+        .crypto()
+        .supports(ciphersuite)
+        .map_err(|_| Error::UnsupportedCiphersuite(format!("{ciphersuite:?}")))
+}
+
 /// Generate a new signature keypair.
 pub fn generate_signature_key<Provider: OpenMlsProvider>(
     provider: &Provider,
     ciphersuite: Ciphersuite,
 ) -> Result<SignatureKeyPair, Error> {
+    ensure_ciphersuite_supported(provider, ciphersuite)?;
+
     let signer = SignatureKeyPair::new(ciphersuite.signature_algorithm())?;
     signer
         .store(provider.storage())
@@ -82,10 +96,18 @@ pub fn generate_key_package<Provider: OpenMlsProvider>(
     last_resort: bool,
     public_key: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, Error> {
+    ensure_ciphersuite_supported(provider, ciphersuite)?;
+
     let (credential_with_key, signer) =
         get_credential_with_key(user_id, provider, ciphersuite, public_key)?;
 
-    let mut key_package_builder = KeyPackage::builder();
+    let mut key_package_builder = KeyPackage::builder().leaf_node_capabilities(Capabilities::new(
+        None,
+        Some(&[ciphersuite]),
+        None,
+        None,
+        None,
+    ));
 
     if last_resort {
         key_package_builder = key_package_builder
@@ -118,6 +140,8 @@ pub fn create_group<Provider: OpenMlsProvider>(
     config: &MlsGroupCreateConfig,
     public_key: Option<Vec<u8>>,
 ) -> Result<MlsGroup, Error> {
+    ensure_ciphersuite_supported(provider, ciphersuite)?;
+
     let (creator_credential, signer) =
         get_credential_with_key(creator_id, provider, ciphersuite, public_key)?;
 
@@ -223,6 +247,33 @@ pub fn process_welcome<Provider: OpenMlsProvider>(
         .build()?;
 
     Ok(staged_welcome.into_group(provider)?)
+}
+
+pub fn process_welcome_with_ratchet_tree<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    welcome: &[u8],
+    config: &MlsGroupJoinConfig,
+    ratchet_tree: &[u8],
+) -> Result<MlsGroup, Error> {
+    let welcome = MlsMessageIn::tls_deserialize_exact(welcome)?;
+    let MlsMessageBodyIn::Welcome(welcome) = welcome.extract() else {
+        return Err(Error::InvalidWelcomeMessage);
+    };
+    let ratchet_tree = RatchetTreeIn::tls_deserialize_exact(ratchet_tree)?;
+
+    let staged_welcome = StagedWelcome::build_from_welcome(provider, config, welcome)?
+        .with_ratchet_tree(ratchet_tree)
+        .replace_old_group()
+        .skip_lifetime_validation()
+        .build()?;
+
+    Ok(staged_welcome.into_group(provider)?)
+}
+
+pub fn export_ratchet_tree(group: &MlsGroup) -> Result<Vec<u8>, Error> {
+    let ratchet_tree: RatchetTreeIn = group.export_ratchet_tree().into();
+
+    Ok(ratchet_tree.tls_serialize_detached()?)
 }
 
 #[derive(Debug)]

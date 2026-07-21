@@ -7,6 +7,9 @@ pub mod error;
 /// Core MLS functionalities.
 pub mod core;
 
+/// Supported KChat MLS ciphersuites.
+pub mod ciphersuite;
+
 /// Implementation of OpenMlsProvider
 ///
 /// Must be passed in to the public OpenMLS API

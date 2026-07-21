@@ -90,6 +90,8 @@ pub enum Error {
     CommitBuilderStage(String),
     #[error("Proposal error: {0}")]
     Proposal(String),
+    #[error("Unsupported ciphersuite: {0}")]
+    UnsupportedCiphersuite(String),
 }
 
 impl From<openmls::prelude::Error> for Error {

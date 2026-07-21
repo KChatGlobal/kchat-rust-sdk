@@ -16,6 +16,7 @@ use openmls::{
 };
 use secrecy::SecretString;
 use uq_openmls::{
+    ciphersuite::{KchatCiphersuite, requires_external_ratchet_tree},
     core::{self, DEFAULT_CIPHERSUITE},
     provider::SqliteProvider,
 };
@@ -47,9 +48,37 @@ pub struct GroupConfigUpdate {
     pub maximum_forward_distance: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[allow(non_camel_case_types)]
+pub enum MlsCiphersuite {
+    MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
+    MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
+    MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87,
+}
+
+impl From<MlsCiphersuite> for KchatCiphersuite {
+    fn from(value: MlsCiphersuite) -> Self {
+        match value {
+            MlsCiphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 => {
+                KchatCiphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+            }
+            MlsCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519 => {
+                KchatCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519
+            }
+            MlsCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87 => {
+                KchatCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87
+            }
+        }
+    }
+}
+
 impl UqMls {
     fn ciphersuite(&self) -> Result<Ciphersuite, Error> {
         Ok(Ciphersuite::try_from(self.ciphersuite)?)
+    }
+
+    fn use_ratchet_tree_extension(&self) -> Result<bool, Error> {
+        Ok(self.use_ratchet_tree_extension && !requires_external_ratchet_tree(self.ciphersuite()?))
     }
 
     fn wire_format_policy(&self) -> OpenMlsWireFormatPolicy {
@@ -61,7 +90,10 @@ impl UqMls {
         }
     }
 
-    fn build_join_config(&self, update: Option<&GroupConfigUpdate>) -> MlsGroupJoinConfig {
+    fn build_join_config(
+        &self,
+        update: Option<&GroupConfigUpdate>,
+    ) -> Result<MlsGroupJoinConfig, Error> {
         let max_past_epochs = update
             .and_then(|update| update.max_past_epochs)
             .unwrap_or(self.max_past_epochs);
@@ -72,15 +104,15 @@ impl UqMls {
             .and_then(|update| update.maximum_forward_distance)
             .unwrap_or(self.maximum_forward_distance);
 
-        MlsGroupJoinConfig::builder()
+        Ok(MlsGroupJoinConfig::builder()
             .wire_format_policy(self.wire_format_policy())
-            .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
+            .use_ratchet_tree_extension(self.use_ratchet_tree_extension()?)
             .max_past_epochs(max_past_epochs as usize)
             .sender_ratchet_configuration(SenderRatchetConfiguration::new(
                 out_of_order_tolerance,
                 maximum_forward_distance,
             ))
-            .build()
+            .build())
     }
 }
 
@@ -506,6 +538,36 @@ impl UqMls {
         })
     }
 
+    #[uniffi::constructor]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_ciphersuite(
+        client_id: String,
+        storage_path: String,
+        group_storage_path: String,
+        max_past_epochs: u16,
+        password: Option<String>,
+        out_of_order_tolerance: u32,
+        maximum_forward_distance: u32,
+        ciphersuite: MlsCiphersuite,
+        callback: Option<Arc<dyn ProcessMessagesCallback>>,
+    ) -> Result<UqMls, Error> {
+        let mut instance = Self::new(
+            client_id,
+            storage_path,
+            group_storage_path,
+            max_past_epochs,
+            password,
+            out_of_order_tolerance,
+            maximum_forward_distance,
+            callback,
+        )?;
+        instance.ciphersuite = KchatCiphersuite::from(ciphersuite).to_openmls() as u16;
+        instance.use_ratchet_tree_extension =
+            !requires_external_ratchet_tree(instance.ciphersuite()?);
+        core::ensure_ciphersuite_supported(&instance.provider, instance.ciphersuite()?)?;
+        Ok(instance)
+    }
+
     pub fn generate_signature_key(&self) -> Result<SignaturePublicKey, Error> {
         let signer = core::generate_signature_key(&self.provider, self.ciphersuite()?)?;
 
@@ -544,7 +606,14 @@ impl UqMls {
         let config = MlsGroupCreateConfig::builder()
             .wire_format_policy(self.wire_format_policy())
             .ciphersuite(ciphersuite)
-            .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
+            .capabilities(openmls::prelude::Capabilities::new(
+                None,
+                Some(&[ciphersuite]),
+                None,
+                None,
+                None,
+            ))
+            .use_ratchet_tree_extension(self.use_ratchet_tree_extension()?)
             .max_past_epochs(self.max_past_epochs as usize)
             .sender_ratchet_configuration(SenderRatchetConfiguration::new(
                 self.out_of_order_tolerance,
@@ -577,7 +646,7 @@ impl UqMls {
         group_id: &str,
         update: GroupConfigUpdate,
     ) -> Result<(), Error> {
-        let config = self.build_join_config(Some(&update));
+        let config = self.build_join_config(Some(&update))?;
         self.provider
             .transaction(|tx_provider| core::update_group_config(tx_provider, group_id, &config))
             .map_err(|e| Error::Sqlite(e.to_string()))?;
@@ -698,10 +767,33 @@ impl UqMls {
     }
 
     pub fn process_welcome(&self, welcome: &[u8]) -> Result<(), Error> {
+        let join_config = self.build_join_config(None)?;
+
         self.provider
             .transaction(|tx_provider| {
-                core::process_welcome(tx_provider, welcome, &self.build_join_config(None))
-                    .map(|_| ())
+                core::process_welcome(tx_provider, welcome, &join_config).map(|_| ())
+            })
+            .map_err(|e| Error::Sqlite(e.to_string()))?;
+
+        Ok(())
+    }
+
+    pub fn process_welcome_with_ratchet_tree(
+        &self,
+        welcome: &[u8],
+        ratchet_tree: &[u8],
+    ) -> Result<(), Error> {
+        let join_config = self.build_join_config(None)?;
+
+        self.provider
+            .transaction(|tx_provider| {
+                core::process_welcome_with_ratchet_tree(
+                    tx_provider,
+                    welcome,
+                    &join_config,
+                    ratchet_tree,
+                )
+                .map(|_| ())
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
 
@@ -842,6 +934,11 @@ impl UqMls {
         )?)
     }
 
+    pub fn export_ratchet_tree(&self, group_id: &str) -> Result<Vec<u8>, Error> {
+        let mls_group = core::group(&self.provider, group_id, [])?;
+        Ok(core::export_ratchet_tree(&mls_group)?)
+    }
+
     pub fn join_by_external_commit(
         &self,
         group_id: &str,
@@ -849,7 +946,7 @@ impl UqMls {
         public_key: Option<Vec<u8>>,
     ) -> Result<JoinByExternalCommitResult, Error> {
         let ciphersuite = self.ciphersuite()?;
-        let config = self.build_join_config(None);
+        let config = self.build_join_config(None)?;
 
         let result = self
             .provider
@@ -879,7 +976,7 @@ impl UqMls {
         public_key: Option<Vec<u8>>,
     ) -> Result<Vec<WrappedJoinByExternalCommitResult>, Error> {
         let ciphersuite = self.ciphersuite()?;
-        let config = self.build_join_config(None);
+        let config = self.build_join_config(None)?;
 
         Ok(args
             .iter()
@@ -1171,6 +1268,7 @@ impl UqMls {
             let cb = cb.clone();
             move |msg: String| cb.on_trigger(msg)
         });
+        let use_ratchet_tree_extension = self.use_ratchet_tree_extension()?;
 
         let result = process_all_messages(
             &self.conn,
@@ -1200,7 +1298,7 @@ impl UqMls {
             },
             &MlsGroupJoinConfig::builder()
                 .wire_format_policy(self.wire_format_policy())
-                .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
+                .use_ratchet_tree_extension(use_ratchet_tree_extension)
                 .max_past_epochs(self.max_past_epochs as usize)
                 .sender_ratchet_configuration(SenderRatchetConfiguration::new(
                     self.out_of_order_tolerance,

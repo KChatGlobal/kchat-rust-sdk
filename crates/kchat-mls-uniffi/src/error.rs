@@ -94,6 +94,8 @@ pub enum Error {
     CommitBuilderStage(String),
     #[error("Proposal error: {0}")]
     Proposal(String),
+    #[error("Unsupported ciphersuite: {0}")]
+    UnsupportedCiphersuite(String),
 }
 
 impl From<String> for Error {
@@ -149,6 +151,7 @@ impl From<MlsError> for Error {
             MlsError::ReAdd(e) => Self::ReAdd(e),
             MlsError::CommitBuilderStage(e) => Self::CommitBuilderStage(e),
             MlsError::Proposal(e) => Self::Proposal(e),
+            MlsError::UnsupportedCiphersuite(e) => Self::UnsupportedCiphersuite(e),
         }
     }
 }

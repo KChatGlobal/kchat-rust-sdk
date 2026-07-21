@@ -92,6 +92,8 @@ pub enum Error {
     CommitBuilderStage(String),
     #[error("Proposal error: {0}")]
     Proposal(String),
+    #[error("Unsupported ciphersuite: {0}")]
+    UnsupportedCiphersuite(String),
 }
 
 impl Error {
@@ -143,6 +145,7 @@ impl Error {
             Error::ReAdd(_) => "RE_ADD_ERROR",
             Error::CommitBuilderStage(_) => "COMMIT_BUILDER_STAGE_ERROR",
             Error::Proposal(_) => "PROPOSAL_ERROR",
+            Error::UnsupportedCiphersuite(_) => "UNSUPPORTED_CIPHERSUITE",
         }
     }
 
@@ -153,6 +156,7 @@ impl Error {
             | Error::InvalidApplicationMessage
             | Error::InvalidProposalMessage
             | Error::InvalidGroupInfo
+            | Error::UnsupportedCiphersuite(_)
             | Error::ExportGroupInfoInvalidExportType
             | Error::KeyPackageVerify(_)
             | Error::MissingRatchetTree
@@ -222,6 +226,7 @@ impl From<uq_openmls::error::Error> for Error {
             MlsError::ReAdd(e) => Self::ReAdd(e),
             MlsError::CommitBuilderStage(e) => Self::CommitBuilderStage(e),
             MlsError::Proposal(e) => Self::Proposal(e),
+            MlsError::UnsupportedCiphersuite(e) => Self::UnsupportedCiphersuite(e),
         }
     }
 }

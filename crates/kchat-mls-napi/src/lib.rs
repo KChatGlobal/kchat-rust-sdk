@@ -86,6 +86,13 @@ pub struct UqMls {
     provider: SqliteProvider,
 }
 
+#[napi(object)]
+pub struct GroupConfigUpdate {
+    pub max_past_epochs: Option<u16>,
+    pub out_of_order_tolerance: Option<u32>,
+    pub maximum_forward_distance: Option<u32>,
+}
+
 #[napi]
 pub enum WireFormatPolicy {
     PurePlaintext,
@@ -1203,6 +1210,22 @@ impl_identity_task!(ProcessWelcomeTask, (), |this| {
     Ok(())
 });
 
+pub struct UpdateGroupConfigTask {
+    provider: SqliteProvider,
+    group_id: String,
+    join_config: MlsGroupJoinConfig,
+}
+
+impl_identity_task!(UpdateGroupConfigTask, (), |this| {
+    this.provider
+        .transaction(|tx_provider| {
+            core::update_group_config(tx_provider, &this.group_id, &this.join_config)
+        })
+        .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
+
+    Ok(())
+});
+
 pub struct ProcessOperationMessageTask {
     provider: SqliteProvider,
     group_id: String,
@@ -1929,14 +1952,24 @@ impl UqMls {
         }
     }
 
-    fn build_join_config(&self) -> MlsGroupJoinConfig {
+    fn build_join_config(&self, update: Option<&GroupConfigUpdate>) -> MlsGroupJoinConfig {
+        let max_past_epochs = update
+            .and_then(|update| update.max_past_epochs)
+            .unwrap_or(self.max_past_epochs);
+        let out_of_order_tolerance = update
+            .and_then(|update| update.out_of_order_tolerance)
+            .unwrap_or(self.out_of_order_tolerance);
+        let maximum_forward_distance = update
+            .and_then(|update| update.maximum_forward_distance)
+            .unwrap_or(self.maximum_forward_distance);
+
         MlsGroupJoinConfig::builder()
             .wire_format_policy(self.wire_format_policy())
             .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
-            .max_past_epochs(self.max_past_epochs as usize)
+            .max_past_epochs(max_past_epochs as usize)
             .sender_ratchet_configuration(SenderRatchetConfiguration::new(
-                self.out_of_order_tolerance,
-                self.maximum_forward_distance,
+                out_of_order_tolerance,
+                maximum_forward_distance,
             ))
             .build()
     }
@@ -2072,8 +2105,21 @@ impl UqMls {
         Ok(AsyncTask::new(ProcessWelcomeTask {
             provider: self.provider.clone(),
             welcome,
-            join_config: self.build_join_config(),
+            join_config: self.build_join_config(None),
             callback: build_log_callback(callback)?,
+        }))
+    }
+
+    #[napi]
+    pub fn update_group_config(
+        &self,
+        group_id: String,
+        update: GroupConfigUpdate,
+    ) -> napi::Result<AsyncTask<UpdateGroupConfigTask>> {
+        Ok(AsyncTask::new(UpdateGroupConfigTask {
+            provider: self.provider.clone(),
+            group_id,
+            join_config: self.build_join_config(Some(&update)),
         }))
     }
 
@@ -2180,7 +2226,7 @@ impl UqMls {
             group_info,
             public_key,
             ciphersuite,
-            join_config: self.build_join_config(),
+            join_config: self.build_join_config(None),
             callback: build_log_callback(callback)?,
         }))
     }
@@ -2200,7 +2246,7 @@ impl UqMls {
             args,
             public_key,
             ciphersuite,
-            join_config: self.build_join_config(),
+            join_config: self.build_join_config(None),
             callback: build_log_callback(callback)?,
         }))
     }

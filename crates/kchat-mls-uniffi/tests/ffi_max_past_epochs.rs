@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use mls_mobile_sdk_rs::mls::UqMls;
+use mls_mobile_sdk_rs::mls::{GroupConfigUpdate, UqMls};
 
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -36,6 +36,25 @@ fn make_client(test_name: &str, client_id: &str) -> UqMls {
         db_path(&format!("{unique}-mls")),
         db_path(&format!("{unique}-group-status")),
         MAX_PAST_EPOCHS,
+        None,
+        OUT_OF_ORDER_TOLERANCE,
+        MAXIMUM_FORWARD_DISTANCE,
+        None,
+    )
+    .expect("should create sqlite-backed UqMls")
+}
+
+fn make_client_with_max_past_epochs(
+    test_name: &str,
+    client_id: &str,
+    max_past_epochs: u16,
+) -> UqMls {
+    let unique = unique_name(test_name, client_id);
+    UqMls::new(
+        client_id.to_owned(),
+        db_path(&format!("{unique}-mls")),
+        db_path(&format!("{unique}-group-status")),
+        max_past_epochs,
         None,
         OUT_OF_ORDER_TOLERANCE,
         MAXIMUM_FORWARD_DISTANCE,
@@ -224,6 +243,55 @@ fn max_past_epochs_allows_decrypting_messages_from_past_epochs() {
             }
         }
     }
+}
+
+#[test]
+fn update_group_config_increases_max_past_epochs_for_active_group() {
+    let test_name = "update_group_config_increases_max_past_epochs_for_active_group";
+    let group_id = "group-update-config-max-past-epochs";
+
+    let alice = make_client_with_max_past_epochs(test_name, "alice", 0);
+    let bob = make_client_with_max_past_epochs(test_name, "bob", 0);
+
+    alice
+        .create_group(group_id, None)
+        .expect("alice should create group");
+    let bob_kp = generate_one_key_package(&bob);
+    let add_bob = alice
+        .add_members(group_id, &[bob_kp])
+        .expect("alice should add bob");
+    alice
+        .merge_pending_commit(group_id)
+        .expect("alice should merge initial add commit");
+    bob.process_welcome(&add_bob.welcome)
+        .expect("bob should process welcome");
+
+    let encrypted = alice
+        .encrypt_message(group_id, b"message-before-config-update", None)
+        .expect("alice should encrypt message before config update");
+    let update = alice
+        .update_leaf_node(group_id)
+        .expect("alice should create epoch-advancing commit");
+    alice
+        .merge_pending_commit(group_id)
+        .expect("alice should merge update commit");
+
+    bob.update_group_config(
+        group_id,
+        GroupConfigUpdate {
+            max_past_epochs: Some(2),
+            out_of_order_tolerance: None,
+            maximum_forward_distance: None,
+        },
+    )
+    .expect("bob should update local group config");
+    bob.process_operation_message(group_id, &update.commit)
+        .expect("bob should process commit using updated config");
+
+    let decrypted = bob
+        .process_application_message(group_id, &encrypted)
+        .expect("bob should decrypt message from retained past epoch");
+    assert_eq!(decrypted.message, b"message-before-config-update");
 }
 
 fn hex_preview(bytes: &[u8], max: usize) -> String {

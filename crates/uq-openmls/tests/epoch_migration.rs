@@ -741,3 +741,65 @@ fn exact_past_epoch_processing_keeps_other_retained_epoch_rows() {
     let _ = fs::remove_file(alice_db_path);
     let _ = fs::remove_file(bob_db_path);
 }
+
+#[test]
+fn update_group_config_increases_retained_past_epochs_for_active_group() {
+    let alice_db_path = temp_db_path();
+    let bob_db_path = temp_db_path();
+    let alice_db_path_str = alice_db_path.to_string_lossy().into_owned();
+    let bob_db_path_str = bob_db_path.to_string_lossy().into_owned();
+
+    let alice = SqliteProvider::new(&alice_db_path_str, &None).expect("should create alice");
+    let bob = SqliteProvider::new(&bob_db_path_str, &None).expect("should create bob");
+    let group_id = "update-group-config-active-group";
+
+    create_group(
+        &alice,
+        "alice",
+        group_id,
+        DEFAULT_CIPHERSUITE,
+        &group_config(0),
+        None,
+    )
+    .expect("should create group");
+    let bob_key_package = core::generate_key_package("bob", &bob, DEFAULT_CIPHERSUITE, true, None)
+        .expect("should generate bob key package");
+    let mut alice_group = load_group(&alice, group_id, []).expect("should load alice group");
+    let alice_signer = group_signer(&alice_group, &alice).expect("should load alice signer");
+    let add_result = core::add_members(&mut alice_group, &alice, &alice_signer, &[bob_key_package])
+        .expect("should add bob");
+    merge_pending_commit(&mut alice_group, &alice).expect("should merge add commit");
+    core::process_welcome(&bob, &add_result.welcome, &join_config(0))
+        .expect("bob should process welcome");
+
+    let mut alice_group = load_group(&alice, group_id, []).expect("should load alice group");
+    let alice_signer = group_signer(&alice_group, &alice).expect("should load alice signer");
+    let past_message = core::encrypt_message(
+        &mut alice_group,
+        &alice,
+        &alice_signer,
+        b"message-before-update",
+    )
+    .expect("should encrypt application message before config update");
+
+    let mut alice_group = load_group(&alice, group_id, []).expect("should load alice group");
+    let alice_signer = group_signer(&alice_group, &alice).expect("should load alice signer");
+    let update =
+        update_leaf_node(&mut alice_group, &alice, &alice_signer).expect("should update alice");
+    merge_pending_commit(&mut alice_group, &alice).expect("should merge alice commit");
+
+    core::update_group_config(&bob, group_id, &join_config(2))
+        .expect("bob should update local group config");
+    let mut bob_group = load_group(&bob, group_id, []).expect("should load bob group");
+    core::process_operation_message(&mut bob_group, &bob, &update.commit)
+        .expect("bob should advance to next epoch with updated config");
+
+    let mut bob_group = load_group(&bob, group_id, [past_message.as_slice()])
+        .expect("should preload retained past epoch for bob group");
+    let result = core::process_application_message(&mut bob_group, &bob, &past_message)
+        .expect("bob should decrypt message from epoch retained after config update");
+    assert_eq!(result.message, b"message-before-update");
+
+    let _ = fs::remove_file(alice_db_path);
+    let _ = fs::remove_file(bob_db_path);
+}

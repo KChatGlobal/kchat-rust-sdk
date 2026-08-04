@@ -865,6 +865,22 @@ pub fn group_context<Provider: OpenMlsProvider>(
         .ok_or(Error::GroupIsNotExisted)
 }
 
+/// Update local MLS group runtime configuration.
+///
+/// This persists client-local configuration such as past epoch retention.
+/// It does not create an MLS commit or change group state visible to other
+/// members.
+pub fn update_group_config<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &str,
+    config: &MlsGroupJoinConfig,
+) -> Result<(), Error> {
+    let mut group = group_current_epoch_message_secrets(provider, group_id)?;
+    group
+        .set_configuration(provider.storage(), config)
+        .map_err(|e| Error::Storage(e.to_string()))
+}
+
 /// Delete group
 pub fn delete_group<Provider: OpenMlsProvider>(
     group: &mut MlsGroup,

@@ -40,6 +40,13 @@ pub struct UqMls {
     provider: SqliteProvider,
 }
 
+#[derive(uniffi::Record)]
+pub struct GroupConfigUpdate {
+    pub max_past_epochs: Option<u16>,
+    pub out_of_order_tolerance: Option<u32>,
+    pub maximum_forward_distance: Option<u32>,
+}
+
 impl UqMls {
     fn ciphersuite(&self) -> Result<Ciphersuite, Error> {
         Ok(Ciphersuite::try_from(self.ciphersuite)?)
@@ -52,6 +59,28 @@ impl UqMls {
             WireFormatPolicy::MixedPlaintext => MIXED_PLAINTEXT_WIRE_FORMAT_POLICY,
             WireFormatPolicy::MixedCiphertext => MIXED_CIPHERTEXT_WIRE_FORMAT_POLICY,
         }
+    }
+
+    fn build_join_config(&self, update: Option<&GroupConfigUpdate>) -> MlsGroupJoinConfig {
+        let max_past_epochs = update
+            .and_then(|update| update.max_past_epochs)
+            .unwrap_or(self.max_past_epochs);
+        let out_of_order_tolerance = update
+            .and_then(|update| update.out_of_order_tolerance)
+            .unwrap_or(self.out_of_order_tolerance);
+        let maximum_forward_distance = update
+            .and_then(|update| update.maximum_forward_distance)
+            .unwrap_or(self.maximum_forward_distance);
+
+        MlsGroupJoinConfig::builder()
+            .wire_format_policy(self.wire_format_policy())
+            .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
+            .max_past_epochs(max_past_epochs as usize)
+            .sender_ratchet_configuration(SenderRatchetConfiguration::new(
+                out_of_order_tolerance,
+                maximum_forward_distance,
+            ))
+            .build()
     }
 }
 
@@ -543,6 +572,19 @@ impl UqMls {
         Ok(())
     }
 
+    pub fn update_group_config(
+        &self,
+        group_id: &str,
+        update: GroupConfigUpdate,
+    ) -> Result<(), Error> {
+        let config = self.build_join_config(Some(&update));
+        self.provider
+            .transaction(|tx_provider| core::update_group_config(tx_provider, group_id, &config))
+            .map_err(|e| Error::Sqlite(e.to_string()))?;
+
+        Ok(())
+    }
+
     pub fn add_members(
         &self,
         group_id: &str,
@@ -658,20 +700,8 @@ impl UqMls {
     pub fn process_welcome(&self, welcome: &[u8]) -> Result<(), Error> {
         self.provider
             .transaction(|tx_provider| {
-                core::process_welcome(
-                    tx_provider,
-                    welcome,
-                    &MlsGroupJoinConfig::builder()
-                        .wire_format_policy(self.wire_format_policy())
-                        .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
-                        .max_past_epochs(self.max_past_epochs as usize)
-                        .sender_ratchet_configuration(SenderRatchetConfiguration::new(
-                            self.out_of_order_tolerance,
-                            self.maximum_forward_distance,
-                        ))
-                        .build(),
-                )
-                .map(|_| ())
+                core::process_welcome(tx_provider, welcome, &self.build_join_config(None))
+                    .map(|_| ())
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
 
@@ -820,15 +850,7 @@ impl UqMls {
         public_key: Option<Vec<u8>>,
     ) -> Result<JoinByExternalCommitResult, Error> {
         let ciphersuite = self.ciphersuite()?;
-        let config = MlsGroupJoinConfig::builder()
-            .wire_format_policy(self.wire_format_policy())
-            .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
-            .max_past_epochs(self.max_past_epochs as usize)
-            .sender_ratchet_configuration(SenderRatchetConfiguration::new(
-                self.out_of_order_tolerance,
-                self.maximum_forward_distance,
-            ))
-            .build();
+        let config = self.build_join_config(None);
 
         let result = self
             .provider
@@ -858,15 +880,7 @@ impl UqMls {
         public_key: Option<Vec<u8>>,
     ) -> Result<Vec<WrappedJoinByExternalCommitResult>, Error> {
         let ciphersuite = self.ciphersuite()?;
-        let config = MlsGroupJoinConfig::builder()
-            .wire_format_policy(self.wire_format_policy())
-            .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
-            .max_past_epochs(self.max_past_epochs as usize)
-            .sender_ratchet_configuration(SenderRatchetConfiguration::new(
-                self.out_of_order_tolerance,
-                self.maximum_forward_distance,
-            ))
-            .build();
+        let config = self.build_join_config(None);
 
         Ok(args
             .iter()

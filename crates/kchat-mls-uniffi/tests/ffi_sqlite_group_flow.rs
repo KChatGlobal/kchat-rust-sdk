@@ -319,6 +319,48 @@ fn failed_operation_does_not_break_follow_up_valid_flow() {
 }
 
 #[test]
+fn wrong_message_processor_does_not_consume_the_sender_ratchet() {
+    let group_id = "group-message-processor-rollback";
+    let (alice, bob, _) = create_two_member_group(
+        "wrong_message_processor_does_not_consume_the_sender_ratchet",
+        group_id,
+    );
+
+    let application_message = alice
+        .api
+        .encrypt_message(group_id, b"application", None)
+        .expect("alice should encrypt an application message");
+
+    assert!(
+        bob.api
+            .process_proposal_message(group_id, &application_message)
+            .is_err(),
+        "an application message must be rejected by the proposal processor"
+    );
+    let decrypted = bob
+        .api
+        .process_application_message(group_id, &application_message)
+        .expect("the rejected application message must remain processable");
+    assert_eq!(decrypted.message, b"application");
+
+    let proposal_message = alice
+        .api
+        .leave_group(group_id)
+        .expect("alice should create a leave proposal")
+        .proposal;
+
+    assert!(
+        bob.api
+            .process_application_message(group_id, &proposal_message)
+            .is_err(),
+        "a proposal message must be rejected by the application processor"
+    );
+    bob.api
+        .process_proposal_message(group_id, &proposal_message)
+        .expect("the rejected proposal message must remain processable");
+}
+
+#[test]
 fn delete_group_and_post_delete_behavior() {
     let group_id = "group-delete";
     let (alice, _bob, _) =

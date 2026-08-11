@@ -8,7 +8,7 @@ use uq_openmls::core::{
     add_members, create_group, export_ratchet_tree, generate_key_package, generate_signature_key,
 };
 
-const GROUP_SIZES: [usize; 3] = [2, 10, 100];
+const GROUP_SIZES: [usize; 4] = [2, 10, 100, 200];
 const CIPHERSUITES: [Ciphersuite; 3] = [
     Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
     Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
@@ -28,19 +28,20 @@ struct SizeRow {
     commit_bytes: usize,
     group_info_bytes: usize,
     external_ratchet_tree_bytes: usize,
+    serialized_ratchet_tree_bytes: usize,
     onboarding_payload_bytes: usize,
 }
 
 fn main() {
     println!(
-        "ciphersuite,group_size,ratchet_tree_mode,signature_public_key_bytes,signature_private_key_bytes,key_package_total_bytes,key_package_avg_bytes,welcome_bytes,commit_bytes,group_info_bytes,external_ratchet_tree_bytes,onboarding_payload_bytes"
+        "ciphersuite,group_size,ratchet_tree_mode,signature_public_key_bytes,signature_private_key_bytes,key_package_total_bytes,key_package_avg_bytes,welcome_bytes,commit_bytes,group_info_bytes,external_ratchet_tree_bytes,serialized_ratchet_tree_bytes,onboarding_payload_bytes"
     );
 
     for ciphersuite in CIPHERSUITES {
         for group_size in GROUP_SIZES {
             let row = measure_sizes(ciphersuite, group_size);
             println!(
-                "{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 row.ciphersuite,
                 row.group_size,
                 row.ratchet_tree_mode,
@@ -52,6 +53,7 @@ fn main() {
                 row.commit_bytes,
                 row.group_info_bytes,
                 row.external_ratchet_tree_bytes,
+                row.serialized_ratchet_tree_bytes,
                 row.onboarding_payload_bytes
             );
         }
@@ -113,8 +115,11 @@ fn measure_sizes(ciphersuite: Ciphersuite, group_size: usize) -> SizeRow {
         .merge_pending_commit(&alice_provider)
         .expect("merge pending commit should succeed");
 
+    let serialized_ratchet_tree =
+        export_ratchet_tree(&alice_group).expect("ratchet tree export should succeed");
+    let serialized_ratchet_tree_bytes = serialized_ratchet_tree.len();
     let external_ratchet_tree = if requires_external_ratchet_tree(ciphersuite) {
-        export_ratchet_tree(&alice_group).expect("ratchet tree export should succeed")
+        serialized_ratchet_tree
     } else {
         Vec::new()
     };
@@ -140,6 +145,7 @@ fn measure_sizes(ciphersuite: Ciphersuite, group_size: usize) -> SizeRow {
         commit_bytes: add_result.commit.len(),
         group_info_bytes,
         external_ratchet_tree_bytes: external_ratchet_tree.len(),
+        serialized_ratchet_tree_bytes,
         onboarding_payload_bytes,
     }
 }
@@ -169,5 +175,25 @@ fn ciphersuite_name(ciphersuite: Ciphersuite) -> &'static str {
             "mlkem1024_aes256_sha384_mldsa87"
         }
         _ => "out_of_scope",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_measures_serialized_trees_at_requested_group_sizes() {
+        assert!(GROUP_SIZES.contains(&10));
+        assert!(GROUP_SIZES.contains(&100));
+        assert!(GROUP_SIZES.contains(&200));
+
+        let row = measure_sizes(Ciphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87, 10);
+        assert_eq!(row.ratchet_tree_mode, "external");
+        assert!(row.serialized_ratchet_tree_bytes > 0);
+        assert_eq!(
+            row.external_ratchet_tree_bytes,
+            row.serialized_ratchet_tree_bytes
+        );
     }
 }

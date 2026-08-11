@@ -1,14 +1,23 @@
 use std::{
     path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use mls_mobile_sdk_rs::mls::{AddMembersResult, RemoveMembersResult, UpdateLeafNodeResult, UqMls};
+use mls_mobile_sdk_rs::{
+    error::Error,
+    mls::{
+        AddMembersResult, ProcessMessagesCallback, RemoveMembersResult, UpdateLeafNodeResult, UqMls,
+    },
+};
 
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 const MAX_PAST_EPOCHS: u16 = 10;
+const DECRYPTED_MESSAGE_TTL_HOURS: u64 = 48;
 const OUT_OF_ORDER_TOLERANCE: u32 = 5;
 const MAXIMUM_FORWARD_DISTANCE: u32 = 10;
 
@@ -17,11 +26,26 @@ struct TestClientConfig {
     client_id: String,
     storage_path: String,
     group_storage_path: String,
+    decrypted_message_ttl_hours: u64,
 }
 
 struct TestClient {
     config: TestClientConfig,
     api: UqMls,
+}
+
+#[derive(Default)]
+struct RecordingProcessMessagesCallback {
+    logs: Mutex<Vec<String>>,
+}
+
+impl ProcessMessagesCallback for RecordingProcessMessagesCallback {
+    fn on_trigger(&self, log: String) {
+        self.logs
+            .lock()
+            .expect("log mutex should not poison")
+            .push(log);
+    }
 }
 
 impl TestClient {
@@ -31,6 +55,7 @@ impl TestClient {
             client_id: client_id.to_owned(),
             storage_path: db_path(&format!("{unique}-mls")),
             group_storage_path: db_path(&format!("{unique}-group-status")),
+            decrypted_message_ttl_hours: DECRYPTED_MESSAGE_TTL_HOURS,
         };
 
         let api = UqMls::new(
@@ -38,6 +63,7 @@ impl TestClient {
             config.storage_path.clone(),
             config.group_storage_path.clone(),
             MAX_PAST_EPOCHS,
+            config.decrypted_message_ttl_hours,
             None,
             OUT_OF_ORDER_TOLERANCE,
             MAXIMUM_FORWARD_DISTANCE,
@@ -54,6 +80,7 @@ impl TestClient {
             self.config.storage_path.clone(),
             self.config.group_storage_path.clone(),
             MAX_PAST_EPOCHS,
+            self.config.decrypted_message_ttl_hours,
             None,
             OUT_OF_ORDER_TOLERANCE,
             MAXIMUM_FORWARD_DISTANCE,
@@ -398,4 +425,124 @@ fn delete_group_and_post_delete_behavior() {
         reopened_epoch.err.is_some(),
         "reopened client should also observe the deleted group as missing"
     );
+}
+
+#[test]
+fn constructor_rejects_zero_decrypted_message_ttl() {
+    let unique = unique_name("constructor_rejects_zero_decrypted_message_ttl", "alice");
+    let result = UqMls::new(
+        "alice".to_owned(),
+        db_path(&format!("{unique}-mls")),
+        db_path(&format!("{unique}-group-status")),
+        MAX_PAST_EPOCHS,
+        0,
+        None,
+        OUT_OF_ORDER_TOLERANCE,
+        MAXIMUM_FORWARD_DISTANCE,
+        None,
+    );
+
+    assert!(matches!(result, Err(Error::InvalidDecryptedMessageTtl)));
+}
+
+#[test]
+fn client_can_explicitly_prune_decrypted_application_messages() {
+    let client = TestClient::new(
+        "client_can_explicitly_prune_decrypted_application_messages",
+        "alice",
+    );
+
+    client
+        .api
+        .prune_decrypted_application_messages()
+        .expect("client-controlled prune should succeed");
+}
+
+#[test]
+fn wal_backed_decrypt_recovers_after_reopen_and_rejects_message_id_reuse() {
+    let group_id = "group-wal-decrypt";
+    let (alice, bob, _) = create_two_member_group(
+        "wal_backed_decrypt_recovers_after_reopen_and_rejects_message_id_reuse",
+        group_id,
+    );
+
+    let first_ciphertext = alice
+        .api
+        .encrypt_message(group_id, b"durable plaintext", None)
+        .expect("alice should encrypt the first application message");
+    let first = bob
+        .api
+        .process_application_message_with_wal(
+            group_id,
+            "server-message-42",
+            &first_ciphertext,
+            None,
+        )
+        .expect("first WAL-backed decrypt should succeed");
+    assert_eq!(first.message, b"durable plaintext");
+
+    let reopened_bob = bob.reopen();
+    let recovered = reopened_bob
+        .api
+        .process_application_message_with_wal(
+            group_id,
+            "server-message-42",
+            &first_ciphertext,
+            None,
+        )
+        .expect("retry after reopen should return durable plaintext");
+    assert_eq!(recovered.message, b"durable plaintext");
+
+    let second_ciphertext = alice
+        .api
+        .encrypt_message(group_id, b"different plaintext", None)
+        .expect("alice should encrypt a distinct application message");
+    let conflict = match reopened_bob.api.process_application_message_with_wal(
+        group_id,
+        "server-message-42",
+        &second_ciphertext,
+        None,
+    ) {
+        Ok(_) => panic!("message ID reuse with distinct ciphertext must fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(conflict, Error::MessageIdConflict));
+}
+
+#[test]
+fn wal_backed_decrypt_emits_cache_and_decrypt_logs_to_callback() {
+    let group_id = "group-wal-callback";
+    let (alice, bob, _) = create_two_member_group(
+        "wal_backed_decrypt_emits_cache_and_decrypt_logs_to_callback",
+        group_id,
+    );
+    let recorder = Arc::new(RecordingProcessMessagesCallback::default());
+    let callback: Arc<dyn ProcessMessagesCallback> = recorder.clone();
+    let ciphertext = alice
+        .api
+        .encrypt_message(group_id, b"callback plaintext", None)
+        .expect("alice should encrypt application message");
+
+    bob.api
+        .process_application_message_with_wal(
+            group_id,
+            "server-message-callback",
+            &ciphertext,
+            Some(callback.clone()),
+        )
+        .expect("first WAL-backed decrypt should succeed");
+    bob.api
+        .process_application_message_with_wal(
+            group_id,
+            "server-message-callback",
+            &ciphertext,
+            Some(callback),
+        )
+        .expect("cached WAL-backed decrypt should succeed");
+
+    let logs = recorder.logs.lock().expect("log mutex should not poison");
+    assert!(logs.iter().any(|log| log.contains("cache miss")));
+    assert!(logs.iter().any(|log| log.contains("decrypt success")));
+    assert!(logs.iter().any(|log| log.contains("cache store success")));
+    assert!(logs.iter().any(|log| log.contains("cache hit")));
 }

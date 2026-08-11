@@ -94,6 +94,10 @@ pub enum Error {
     CommitBuilderStage(String),
     #[error("Proposal error: {0}")]
     Proposal(String),
+    #[error("Decrypted message TTL must be greater than zero and fit in seconds")]
+    InvalidDecryptedMessageTtl,
+    #[error("Message ID is already bound to different ciphertext")]
+    MessageIdConflict,
 }
 
 impl From<String> for Error {

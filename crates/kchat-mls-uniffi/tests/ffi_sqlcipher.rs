@@ -20,6 +20,7 @@ use mls_mobile_sdk_rs::mls::UqMls;
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 const MAX_PAST_EPOCHS: u16 = 10;
+const DECRYPTED_MESSAGE_TTL_HOURS: u64 = 48;
 const OUT_OF_ORDER_TOLERANCE: u32 = 5;
 const MAXIMUM_FORWARD_DISTANCE: u32 = 10;
 
@@ -96,6 +97,7 @@ fn open(paths: &PathSet, client_id: &str, password: Option<&str>) -> Result<UqMl
         paths.storage_path.clone(),
         paths.group_storage_path.clone(),
         MAX_PAST_EPOCHS,
+        DECRYPTED_MESSAGE_TTL_HOURS,
         password.map(|p| p.to_owned()),
         OUT_OF_ORDER_TOLERANCE,
         MAXIMUM_FORWARD_DISTANCE,

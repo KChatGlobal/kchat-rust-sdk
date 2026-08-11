@@ -28,6 +28,7 @@ use openmls_traits::storage::StorageProvider;
 use serde::{Serialize, de::DeserializeOwned};
 
 mod codec;
+mod decrypted_application_messages;
 mod encryption_key_pairs;
 mod epoch_key_pairs;
 mod epoch_migration_state;
@@ -42,6 +43,7 @@ mod storage_provider;
 mod wrappers;
 
 pub use codec::Codec;
+pub use decrypted_application_messages::DecryptedApplicationMessage;
 pub use rusqlite::Connection;
 pub use storage_provider::{
     SqliteConnectionPool, SqliteStorageProvider, TransactionalStorageProvider,

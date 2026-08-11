@@ -1,0 +1,18 @@
+(* Comparison model: Shor oracle breaks both classical KEM and signatures. *)
+free c: channel.
+free transcript: bitstring.
+free protected_value: bitstring [private].
+event Signed(bitstring).
+event Accepted(bitstring).
+query attacker(protected_value).
+query message: bitstring; inj-event(Accepted(message)) ==> inj-event(Signed(message)).
+process
+  new kem_sk: classical_kem_sk;
+  new signing_sk: classical_sig_sk;
+  let kem_pk = classical_kem_public(kem_sk) in
+  let signing_pk = classical_sig_public(signing_sk) in
+  event Signed(transcript);
+  out(c, (kem_pk, signing_pk,
+          classical_kem_encrypt(kem_pk, protected_value), classical_sign(transcript, signing_sk))) |
+  ! in(c, candidate: signature);
+   let message = classical_verify(candidate, signing_pk) in event Accepted(message)

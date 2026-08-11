@@ -125,7 +125,9 @@ fn full_pq_group_joins_with_external_ratchet_tree_for_ten_members() {
     let mut member_providers = Vec::new();
     let mut key_packages = Vec::new();
 
-    for member_index in 1..member_count {
+    // Reserve one independent KeyPackage for the rejection case below, since
+    // processing a Welcome consumes its KeyPackage before tree validation.
+    for member_index in 1..(member_count - 1) {
         let provider = OpenMlsLibcrux::default();
         let member_id = format!("member_{member_index}");
         let signer = generate_signature_key(&provider, ciphersuite)
@@ -142,6 +144,20 @@ fn full_pq_group_joins_with_external_ratchet_tree_for_ten_members() {
         member_providers.push(provider);
         key_packages.push(key_package);
     }
+
+    let tampered_tree_provider = OpenMlsLibcrux::default();
+    let tampered_tree_signer = generate_signature_key(&tampered_tree_provider, ciphersuite)
+        .expect("tampered-tree member should generate full-PQ signature key");
+    key_packages.push(
+        generate_key_package(
+            "tampered_tree_member",
+            &tampered_tree_provider,
+            ciphersuite,
+            false,
+            Some(tampered_tree_signer.public().to_vec()),
+        )
+        .expect("tampered-tree member should generate full-PQ key package"),
+    );
 
     let mut alice_group = create_group(
         &alice_provider,
@@ -169,6 +185,28 @@ fn full_pq_group_joins_with_external_ratchet_tree_for_ten_members() {
         .expect("Alice should merge add commit");
     let ratchet_tree =
         export_ratchet_tree(&alice_group).expect("external ratchet tree should serialize");
+
+    // `process_welcome_with_ratchet_tree` delegates the authenticated tree
+    // validation to OpenMLS. A modified external tree must not produce a group.
+    let mut tampered_ratchet_tree = ratchet_tree.clone();
+    let last_byte = tampered_ratchet_tree
+        .last_mut()
+        .expect("serialized ratchet tree should not be empty");
+    *last_byte ^= 0x01;
+    assert!(
+        process_welcome_with_ratchet_tree(
+            &tampered_tree_provider,
+            &add_result.welcome,
+            &MlsGroupJoinConfig::builder()
+                .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
+                .use_ratchet_tree_extension(false)
+                .max_past_epochs(MAX_PAST_EPOCHS)
+                .build(),
+            &tampered_ratchet_tree,
+        )
+        .is_err(),
+        "a tampered external ratchet tree must be rejected"
+    );
 
     for provider in &member_providers {
         let joined_group = process_welcome_with_ratchet_tree(

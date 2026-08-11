@@ -1,0 +1,22 @@
+(* Comparison model: an ideal ML-KEM branch preserves confidentiality, while
+   the still-classical signature can be forged by the Shor oracle. *)
+free c: channel.
+free welcome_ad: bitstring.
+free transcript: bitstring.
+free protected_value: bitstring [private].
+event Signed(bitstring).
+event Accepted(bitstring).
+query attacker(protected_value).
+query message: bitstring; inj-event(Accepted(message)) ==> inj-event(Signed(message)).
+process
+  new kem_sk: kem_sk;
+  new signing_sk: classical_sig_sk;
+  new coins: bitstring;
+  let kem_pk = mlkem_public(kem_sk) in
+  let signing_pk = classical_sig_public(signing_sk) in
+  let welcome_key = mlkem_shared(kem_pk, coins) in
+  event Signed(transcript);
+  out(c, (kem_pk, signing_pk, mlkem_encaps(kem_pk, coins),
+          welcome_encrypt(welcome_key, protected_value, welcome_ad), classical_sign(transcript, signing_sk))) |
+  ! in(c, candidate: signature);
+   let message = classical_verify(candidate, signing_pk) in event Accepted(message)

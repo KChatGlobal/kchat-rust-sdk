@@ -24,6 +24,20 @@ public-key primitives; ML-KEM and ML-DSA remain ideal assumptions.
 
 ## Model outcomes
 
+#### Hybrid XWing result
+
+`pq_mls_xwing_quantum_break.pv` combines an idealised ML-KEM Welcome key with
+a classical signing key and gives the attacker the classical Shor oracle.
+
+| Claim | ProVerif result | Interpretation |
+| --- | --- | --- |
+| The Welcome-protected value is not learned by the network attacker. | true | The attacker cannot recover the value from the ideal ML-KEM branch. |
+| `Accepted(message)` implies a matching `Signed(message)`. | false | The attacker can derive the classical signing key and submit a signature for a message never signed by the legitimate sender. |
+
+Thus, this hybrid comparison only retains the confidentiality claim represented
+by the ML-KEM branch. It must not be read as providing post-quantum sender
+authentication while its signature remains classical.
+
 ### Full-PQ onboarding model
 
 `pq_mls_onboarding.pv` verifies three claims under the model's ideal ML-KEM,

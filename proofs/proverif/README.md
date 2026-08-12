@@ -1,4 +1,4 @@
-# KChat full-PQ MLS ProVerif models
+# KChat PQ MLS ProVerif models
 
 ## Scope
 

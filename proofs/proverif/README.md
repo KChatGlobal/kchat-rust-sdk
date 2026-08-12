@@ -20,22 +20,24 @@ MLS interoperability.
 
 They also do not simulate quantum computation. The quantum-comparison models
 instead give the attacker explicit symbolic reductions that break classical
-public-key primitives; ML-KEM and ML-DSA remain ideal assumptions.
+public-key primitives. ML-KEM and ML-DSA remain ideal assumptions.
 
 ## Model outcomes
 
-#### Hybrid XWing result
+#### Hybrid XWing comparison controls
 
-`pq_mls_xwing_quantum_break.pv` combines an idealised ML-KEM Welcome key with
-a classical signing key and gives the attacker the classical Shor oracle.
+`pq_mls_xwing_quantum_break.pv` models XWing as one combined KEM public key
+and one combined KEM ciphertext. Its shared secret combines internal ML-KEM
+and X25519 components. The attacker receives an explicit Shor oracle for the
+X25519 component of that same XWing ciphertext and for the Ed25519 signing
+key, but no ML-KEM-break oracle.
 
 | Claim | ProVerif result | Interpretation |
 | --- | --- | --- |
-| The Welcome-protected value is not learned by the network attacker. | true | The attacker cannot recover the value from the ideal ML-KEM branch. |
+| The Welcome-protected value is not learned by the network attacker. | true | Breaking the internal X25519 component of the one XWing ciphertext is insufficient: the attacker still cannot derive its ML-KEM component. |
 | `Accepted(message)` implies a matching `Signed(message)`. | false | The attacker can derive the classical signing key and submit a signature for a message never signed by the legitimate sender. |
 
-Thus, this hybrid comparison only retains the confidentiality claim represented
-by the ML-KEM branch. It must not be read as providing post-quantum sender
+This partial-break comparison does not provide post-quantum sender
 authentication while its signature remains classical.
 
 ### Full-PQ onboarding model
@@ -64,7 +66,7 @@ the stated classical break.
 | Model | Result | Interpretation |
 | --- | --- | --- |
 | `pq_mls_classical_quantum_break.pv` | 0 true / 2 false | Classical confidentiality and classical signature authentication both fail under the break assumption. |
-| `pq_mls_xwing_quantum_break.pv` | 1 true / 1 false | The ideal ML-KEM branch preserves Welcome secrecy, but a classical signature can be forged. |
+| `pq_mls_xwing_quantum_break.pv` | 1 true / 1 false | Breaking only XWing's internal X25519 component and the classical signature cannot recover the Welcome-protected value. |
 | `pq_mls_full_pq_quantum_break.pv` | 3 true / 0 false | Welcome secrecy, authentication, and committed-state binding hold while ML-KEM and ML-DSA remain ideal assumptions. |
 
 ## Run

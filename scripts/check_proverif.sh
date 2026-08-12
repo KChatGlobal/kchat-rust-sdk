@@ -20,11 +20,21 @@ require_outcomes() {
   rm -f "$combined_model"
   trap - RETURN
   printf '%s\n' "$output"
-  [[ "$(grep -Ec '^RESULT (not attacker|inj-event).* is true\.$' <<<"$output")" -eq "$expected_true" ]]
-  [[ "$(grep -Ec '^RESULT (not attacker|inj-event).* is false\.$' <<<"$output")" -eq "$expected_false" ]]
+  [[ "$(grep -Ec '^RESULT (not attacker|not event|inj-event).* is true\.$' <<<"$output")" -eq "$expected_true" ]]
+  [[ "$(grep -Ec '^RESULT (not attacker|not event|inj-event).* is false\.$' <<<"$output")" -eq "$expected_false" ]]
+}
+
+require_xwing_combined_wire_model() {
+  local model="$1"
+
+  rg -q 'let xwing_pk = xwing_public\(' "$model"
+  rg -q 'xwing_encaps\(xwing_pk, coins\)' "$model"
+  ! rg -q 'classical_kem_(pk|sk|private|public|encrypt|decrypt)' "$model"
+  ! rg -q 'mlkem_(private|public|encaps|decaps|shared)' "$model"
 }
 
 proverif -help >/dev/null 2>&1 || :
+require_xwing_combined_wire_model proofs/proverif/pq_mls_xwing_quantum_break.pv
 require_outcomes 3 0 proofs/proverif/pq_mls_onboarding.pv
 require_outcomes 0 2 proofs/proverif/pq_mls_classical_quantum_break.pv
 require_outcomes 1 1 proofs/proverif/pq_mls_xwing_quantum_break.pv

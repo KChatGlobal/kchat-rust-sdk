@@ -6,6 +6,9 @@ type symkey.
 type kem_sk.
 type kem_pk.
 type kem_ct.
+type xwing_sk.
+type xwing_pk.
+type xwing_ct.
 type sig_sk.
 type sig_pk.
 type signature.
@@ -22,6 +25,28 @@ fun mlkem_decaps(kem_ct, kem_sk): symkey
 reduc forall sk: kem_sk, coins: bitstring;
   mlkem_decaps(mlkem_encaps(mlkem_public(sk), coins), sk) =
     mlkem_shared(mlkem_public(sk), coins).
+
+(* XWing is represented as one combined KEM public key and one combined KEM
+   ciphertext.  Its two component secrets remain internal to the KEM. *)
+fun xwing_public(xwing_sk): xwing_pk.
+fun xwing_encaps(xwing_pk, bitstring): xwing_ct.
+fun xwing_pq_component(xwing_pk, bitstring): symkey.
+fun xwing_classical_component(xwing_pk, bitstring): symkey.
+fun xwing_combine(symkey, symkey): symkey.
+fun xwing_decaps(xwing_ct, xwing_sk): symkey
+reduc forall sk: xwing_sk, coins: bitstring;
+  xwing_decaps(xwing_encaps(xwing_public(sk), coins), sk) =
+    xwing_combine(xwing_pq_component(xwing_public(sk), coins),
+                  xwing_classical_component(xwing_public(sk), coins)).
+
+(* This abstracts Shor breaking XWing's X25519 component from the single
+   serialized XWing encapsulation.  It deliberately does not expose the
+   ML-KEM component or the final XWing shared secret. *)
+fun shor_break_xwing_classical(xwing_ct, xwing_pk): symkey
+reduc forall sk: xwing_sk, coins: bitstring;
+  shor_break_xwing_classical(xwing_encaps(xwing_public(sk), coins),
+                             xwing_public(sk)) =
+    xwing_classical_component(xwing_public(sk), coins).
 
 fun mldsa_public(sig_sk): sig_pk.
 fun mldsa_sign(bitstring, sig_sk): signature.

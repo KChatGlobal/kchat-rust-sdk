@@ -3598,7 +3598,7 @@ dependencies = [
  "kchat_storage_provider",
  "openmls",
  "openmls_basic_credential",
- "openmls_rust_crypto",
+ "openmls_libcrux_crypto",
  "openmls_sqlite_storage",
  "openmls_traits",
  "rusqlite",

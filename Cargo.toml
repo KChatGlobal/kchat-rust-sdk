@@ -29,6 +29,7 @@ openmls = { version = "0.8.0" }
 openmls_basic_credential = { version = "0.5.0" }
 openmls_traits = { version = "0.5.0" }
 openmls_rust_crypto = { version =  "0.5.0" }
+openmls_libcrux_crypto = { git = "https://github.com/KChatGlobal/openmls.git", branch = "feature/pq-experimental" }
 
 [patch.crates-io]
 openmls = { git = "https://github.com/KChatGlobal/openmls.git", branch = "feature/pq-experimental" }

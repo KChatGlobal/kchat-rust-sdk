@@ -20,12 +20,24 @@ use uq_openmls::{
         generate_key_package, generate_signature_key, process_application_message, process_welcome,
         process_welcome_with_ratchet_tree,
     },
+    provider::SqliteProvider,
 };
 
 const GROUP_ID: &str = "post_quantum_poc_group";
 const ALICE: &str = "alice";
 const BOB: &str = "bob";
 const MAX_PAST_EPOCHS: usize = 30;
+
+fn temp_sqlite_path(test_name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "uq-openmls-{test_name}-{}-{nanos}.sqlite",
+        std::process::id()
+    ))
+}
 
 #[test]
 fn kchat_ciphersuite_uses_canonical_values() {
@@ -41,6 +53,34 @@ fn kchat_ciphersuite_uses_canonical_values() {
         KchatCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87.to_openmls(),
         Ciphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87
     );
+}
+
+#[test]
+fn sqlite_provider_creates_xwing_group() {
+    let db_path = temp_sqlite_path("xwing");
+    let db_path_text = db_path.to_string_lossy().into_owned();
+    let provider = SqliteProvider::new(&db_path_text, &None)
+        .expect("SQLite provider should initialize for the XWing runtime path");
+    let ciphersuite = Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519;
+    let config = MlsGroupCreateConfig::builder()
+        .ciphersuite(ciphersuite)
+        .use_ratchet_tree_extension(true)
+        .build();
+
+    let group = create_group(
+        &provider,
+        ALICE,
+        "sqlite-xwing-group",
+        ciphersuite,
+        &config,
+        None,
+    )
+    .expect("SQLite-backed runtime provider should support XWing");
+
+    assert_eq!(group.ciphersuite(), ciphersuite);
+    drop(group);
+    drop(provider);
+    let _ = fs::remove_file(db_path);
 }
 
 #[test]
@@ -434,3 +474,8 @@ fn credential_with_key(identity: &str, signer: &SignatureKeyPair) -> CredentialW
         signature_key: signer.to_public_vec().into(),
     }
 }
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};

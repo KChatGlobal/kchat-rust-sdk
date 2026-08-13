@@ -14,7 +14,7 @@ categories.workspace = true
 openmls = { workspace = true, features = ["fork-resolution"] }
 openmls_basic_credential = { workspace = true }
 openmls_traits = { workspace = true }
-openmls_rust_crypto = { workspace = true }
+openmls_libcrux_crypto = { workspace = true }
 kchat_storage_provider = { path = "../kchat-storage-provider" }
 
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }

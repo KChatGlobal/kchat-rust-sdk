@@ -33,6 +33,7 @@ extensions-draft-08 = [
 [dev-dependencies]
 openmls = { workspace = true, features = ["fork-resolution", "libcrux-provider", "test-utils"] }
 openmls_basic_credential = { workspace = true, features = ["test-utils"] }
+openmls_rust_crypto = { workspace = true }
 criterion = { workspace = true }
 openmls_sqlite_storage = { version = "0.2.0" }
 

@@ -54,6 +54,10 @@ pub enum Error {
     CreationFromExternal(String),
     #[error("Missing ratchet tree error")]
     MissingRatchetTree,
+    #[error("External ratchet tree is required for this ciphersuite")]
+    ExternalRatchetTreeRequired,
+    #[error("External ratchet tree is not supported for this ciphersuite")]
+    ExternalRatchetTreeNotRequired,
     #[error("Credential is existed.")]
     CredentialIsExisted,
     #[error("Remove members error: {0}")]

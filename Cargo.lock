@@ -3599,6 +3599,7 @@ dependencies = [
  "openmls",
  "openmls_basic_credential",
  "openmls_libcrux_crypto",
+ "openmls_rust_crypto",
  "openmls_sqlite_storage",
  "openmls_traits",
  "rusqlite",

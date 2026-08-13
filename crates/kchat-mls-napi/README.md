@@ -2,6 +2,21 @@
 
 This crate provides bindings for the MLS Rust SDK using [NAPI-RS](https://napi.rs/).
 
+## Multiple MLS ciphersuites
+
+The SDK uses one libcrux crypto provider and can keep groups using classic,
+XWing, and full-PQ ciphersuites in the same local storage. Use
+`newWithCiphersuitePolicy(preferredCiphersuite, supportedCiphersuites)` to
+enable more than one suite, then use `generateKeyPackagesFor` and
+`createGroupWithCiphersuite` for a specific suite. Existing API methods remain
+available and use the preferred suite.
+
+Each KeyPackage belongs to one ciphersuite. A group keeps the suite selected at
+creation; changing a client's preferred suite never changes existing groups.
+Classic and XWing Welcomes carry an embedded ratchet tree. A full-PQ Welcome
+requires the separately transported ratchet tree and must be processed with
+`processWelcomeWithRatchetTree`.
+
 ## Prerequisites
 
 - Install the latest `Rust`

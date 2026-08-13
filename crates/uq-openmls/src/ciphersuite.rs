@@ -13,6 +13,12 @@ pub enum KchatCiphersuite {
         Ciphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87 as u16,
 }
 
+pub const SDK_SUPPORTED_CIPHERSUITES: [KchatCiphersuite; 3] = [
+    KchatCiphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
+    KchatCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
+    KchatCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87,
+];
+
 impl KchatCiphersuite {
     pub fn to_openmls(self) -> Ciphersuite {
         match self {
@@ -49,6 +55,10 @@ pub fn requires_external_ratchet_tree(ciphersuite: Ciphersuite) -> bool {
     ciphersuite == Ciphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87
 }
 
+pub fn ensure_supported_ciphersuite(ciphersuite: Ciphersuite) -> Result<(), Error> {
+    KchatCiphersuite::from_u16(ciphersuite as u16).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +76,20 @@ mod tests {
         assert!(!requires_external_ratchet_tree(
             Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519
         ));
+    }
+
+    #[test]
+    fn sdk_suite_policy_accepts_the_three_supported_suites() {
+        for suite in SDK_SUPPORTED_CIPHERSUITES {
+            assert!(ensure_supported_ciphersuite(suite.to_openmls()).is_ok());
+        }
+    }
+
+    #[test]
+    fn sdk_suite_policy_rejects_an_unlisted_suite() {
+        assert!(
+            ensure_supported_ciphersuite(Ciphersuite::MLS_128_DHKEMP256_AES128GCM_SHA256_P256)
+                .is_err()
+        );
     }
 }

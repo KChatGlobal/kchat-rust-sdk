@@ -311,6 +311,26 @@ pub fn process_all_messages(
     join_config: &MlsGroupJoinConfig,
     log: Option<&dyn Fn(String)>,
 ) -> Result<ProcessAllMessagesResult, Error> {
+    process_all_messages_with_welcome_config_resolver(
+        conn,
+        provider,
+        args,
+        |_| Ok::<_, std::convert::Infallible>(join_config.clone()),
+        log,
+    )
+}
+
+pub fn process_all_messages_with_welcome_config_resolver<ResolveWelcomeConfig, ResolveError>(
+    conn: &GroupStatusConnection,
+    provider: &SqliteProvider,
+    args: ProcessAllMessagesArgs,
+    resolve_welcome_config: ResolveWelcomeConfig,
+    log: Option<&dyn Fn(String)>,
+) -> Result<ProcessAllMessagesResult, Error>
+where
+    ResolveWelcomeConfig: Fn(&[u8]) -> Result<MlsGroupJoinConfig, ResolveError>,
+    ResolveError: fmt::Display,
+{
     emit_log(log, || "start process all messages".to_owned());
 
     let mut result = ProcessAllMessagesResult {
@@ -555,9 +575,21 @@ pub fn process_all_messages(
             match msg.message_type {
                 MessageType::Welcome => {
                     emit_log(log, || format!("process welcome, group {}", group_id));
+                    let join_config = match resolve_welcome_config(&msg.blob) {
+                        Ok(join_config) => join_config,
+                        Err(err) => {
+                            emit_log(log, || {
+                                format!(
+                                    "process welcome configuration error, group {}: {}",
+                                    group_id, err
+                                )
+                            });
+                            continue;
+                        }
+                    };
                     match provider
                         .transaction(|tx_provider| {
-                            process_welcome(tx_provider, &msg.blob, join_config)
+                            process_welcome(tx_provider, &msg.blob, &join_config)
                         })
                         .map_err(|e| Error::Storage(e.to_string()))
                     {

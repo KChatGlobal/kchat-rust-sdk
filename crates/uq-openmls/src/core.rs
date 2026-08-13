@@ -21,6 +21,7 @@ use openmls_traits::{
 };
 
 use crate::{
+    ciphersuite::ensure_supported_ciphersuite as ensure_sdk_ciphersuite_supported,
     error::Error,
     util::{
         find_members_by_identity, get_credential_with_key, get_identity_from_key_packages,
@@ -33,6 +34,59 @@ pub const DEFAULT_CIPHERSUITE: Ciphersuite =
 
 fn protocol_message(message: &[u8]) -> Result<ProtocolMessage, Error> {
     Ok(MlsMessageIn::tls_deserialize_exact(message)?.try_into_protocol_message()?)
+}
+
+const MLS_PROTOCOL_VERSION_BYTES: [u8; 2] = [0x00, 0x01];
+const MLS_WELCOME_WIRE_FORMAT_BYTES: [u8; 2] = [0x00, 0x03];
+const MLS_MESSAGE_HEADER_LEN: usize = 4;
+const MLS_CIPHERSUITE_LEN: usize = 2;
+
+fn decode_welcome_ciphersuite_header(welcome: &[u8]) -> Result<Ciphersuite, Error> {
+    let header_len = MLS_MESSAGE_HEADER_LEN + MLS_CIPHERSUITE_LEN;
+    if welcome.len() < header_len
+        || welcome[..2] != MLS_PROTOCOL_VERSION_BYTES
+        || welcome[2..4] != MLS_WELCOME_WIRE_FORMAT_BYTES
+    {
+        return Err(Error::InvalidWelcomeMessage);
+    }
+
+    let value = u16::from_be_bytes([welcome[4], welcome[5]]);
+    Ciphersuite::try_from(value).map_err(|err| Error::UnsupportedCiphersuite(err.to_string()))
+}
+
+/// Returns the ciphersuite carried in the public header of a Welcome message.
+///
+/// The full MLS message is deserialized first so callers cannot route local
+/// onboarding configuration based on a truncated or non-Welcome artifact.
+pub fn welcome_ciphersuite(welcome: &[u8]) -> Result<Ciphersuite, Error> {
+    let message = MlsMessageIn::tls_deserialize_exact(welcome)?;
+    if !matches!(message.extract(), MlsMessageBodyIn::Welcome(_)) {
+        return Err(Error::InvalidWelcomeMessage);
+    }
+
+    let ciphersuite = decode_welcome_ciphersuite_header(welcome)?;
+    ensure_sdk_ciphersuite_supported(ciphersuite)?;
+    Ok(ciphersuite)
+}
+
+/// Returns the ciphersuite of a GroupInfo artifact, accepting either its bare
+/// TLS form or an MLSMessage wrapper.
+pub fn group_info_ciphersuite(group_info: &[u8]) -> Result<Ciphersuite, Error> {
+    let group_info = if let Ok(group_info) = VerifiableGroupInfo::tls_deserialize_exact(group_info)
+    {
+        group_info
+    } else if let Ok(message) = MlsMessageIn::tls_deserialize_exact(group_info) {
+        let MlsMessageBodyIn::GroupInfo(group_info) = message.extract() else {
+            return Err(Error::InvalidGroupInfo);
+        };
+        group_info
+    } else {
+        return Err(Error::InvalidGroupInfo);
+    };
+
+    let ciphersuite = group_info.ciphersuite();
+    ensure_sdk_ciphersuite_supported(ciphersuite)?;
+    Ok(ciphersuite)
 }
 
 fn protocol_message_epochs<'a, Messages>(messages: Messages) -> Result<Vec<GroupEpoch>, Error>
@@ -1017,4 +1071,19 @@ pub fn readd<Provider: OpenMlsProvider>(
         current_epoch: group.epoch().as_u64(),
         pre_tree_hash,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_public_ciphersuite_from_welcome_wire_header() {
+        let welcome = [0x00, 0x01, 0x00, 0x03, 0x00, 0x4d];
+
+        assert_eq!(
+            decode_welcome_ciphersuite_header(&welcome).unwrap(),
+            Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519
+        );
+    }
 }

@@ -2,12 +2,15 @@
 
 pub mod error;
 
+use std::collections::BTreeSet;
+
 use kchat_mls::{
     CreateCustomProposalArgs, GroupPendingOperation, GroupStatusConnection,
     OP_JOIN_BY_EXTERNAL_COMMIT, OP_NONE, create_custom_proposal, delete_group_status,
     extract_jid_from_member_id, get_all_group_ids, get_group_pending_operation,
     get_group_pending_operations_batch, insert_or_update_group_status,
-    open_group_status_connection, process_all_messages, process_custom_proposal,
+    open_group_status_connection, process_all_messages_with_welcome_config_resolver,
+    process_custom_proposal,
 };
 use napi::{
     Task,
@@ -25,7 +28,7 @@ use openmls::{
 };
 use secrecy::SecretString;
 use uq_openmls::{
-    ciphersuite::{KchatCiphersuite, requires_external_ratchet_tree},
+    ciphersuite::{KchatCiphersuite, ensure_supported_ciphersuite, requires_external_ratchet_tree},
     core::{self, DEFAULT_CIPHERSUITE},
     provider::SqliteProvider,
 };
@@ -54,6 +57,22 @@ impl From<MlsCiphersuite> for KchatCiphersuite {
             }
             MlsCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87 => {
                 KchatCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87
+            }
+        }
+    }
+}
+
+impl From<KchatCiphersuite> for MlsCiphersuite {
+    fn from(value: KchatCiphersuite) -> Self {
+        match value {
+            KchatCiphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 => {
+                Self::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+            }
+            KchatCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519 => {
+                Self::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519
+            }
+            KchatCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87 => {
+                Self::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87
             }
         }
     }
@@ -104,6 +123,7 @@ macro_rules! impl_identity_task {
 pub struct UqMls {
     client_id: String,
     ciphersuite: u16,
+    supported_ciphersuites: BTreeSet<u16>,
     wire_format_policy: WireFormatPolicy,
     use_ratchet_tree_extension: bool,
     max_past_epochs: u16,
@@ -121,6 +141,7 @@ pub struct GroupConfigUpdate {
 }
 
 #[napi]
+#[derive(Clone, Copy)]
 pub enum WireFormatPolicy {
     PurePlaintext,
     PureCiphertext,
@@ -572,7 +593,12 @@ pub struct ProcessAllMessagesTask {
     conn: GroupStatusConnection,
     provider: SqliteProvider,
     args: Option<kchat_mls::ProcessAllMessagesArgs>,
-    join_config: Option<MlsGroupJoinConfig>,
+    wire_format_policy: WireFormatPolicy,
+    use_ratchet_tree_extension: bool,
+    max_past_epochs: u16,
+    out_of_order_tolerance: u32,
+    maximum_forward_distance: u32,
+    supported_ciphersuites: BTreeSet<u16>,
     callback: Option<LogThreadsafeFunction>,
 }
 
@@ -590,17 +616,36 @@ impl Task for ProcessAllMessagesTask {
                 "process_all_messages task was already consumed",
             )
         })?;
-        let join_config = self.join_config.take().ok_or_else(|| {
-            napi::Error::new(
-                napi::Status::GenericFailure,
-                "process_all_messages task join config was already consumed",
-            )
-        })?;
-        process_all_messages(
+        process_all_messages_with_welcome_config_resolver(
             &self.conn,
             &self.provider,
             args,
-            &join_config,
+            |welcome| {
+                let ciphersuite = core::welcome_ciphersuite(welcome)?;
+                if !self.supported_ciphersuites.contains(&(ciphersuite as u16)) {
+                    return Err(Error::UnsupportedCiphersuite(format!(
+                        "{ciphersuite:?} is not enabled for this instance"
+                    )));
+                }
+                if requires_external_ratchet_tree(ciphersuite) {
+                    return Err(Error::ExternalRatchetTreeRequired);
+                }
+                let wire_format_policy = match self.wire_format_policy {
+                    WireFormatPolicy::PurePlaintext => PURE_PLAINTEXT_WIRE_FORMAT_POLICY,
+                    WireFormatPolicy::PureCiphertext => PURE_CIPHERTEXT_WIRE_FORMAT_POLICY,
+                    WireFormatPolicy::MixedPlaintext => MIXED_PLAINTEXT_WIRE_FORMAT_POLICY,
+                    WireFormatPolicy::MixedCiphertext => MIXED_CIPHERTEXT_WIRE_FORMAT_POLICY,
+                };
+                Ok(MlsGroupJoinConfig::builder()
+                    .wire_format_policy(wire_format_policy)
+                    .use_ratchet_tree_extension(self.use_ratchet_tree_extension)
+                    .max_past_epochs(self.max_past_epochs as usize)
+                    .sender_ratchet_configuration(SenderRatchetConfiguration::new(
+                        self.out_of_order_tolerance,
+                        self.maximum_forward_distance,
+                    ))
+                    .build())
+            },
             callback.map(|_| &log_fn as &dyn Fn(String)),
         )
         .map_err(|e| {
@@ -1547,11 +1592,16 @@ pub struct BatchJoinByExternalCommitTask {
     conn: GroupStatusConnection,
     provider: SqliteProvider,
     client_id: String,
-    args: Vec<JoinByExternalCommitArgs>,
+    args: Vec<BatchJoinByExternalCommitItem>,
     public_key: Option<Vec<u8>>,
+    callback: Option<LogThreadsafeFunction>,
+}
+
+struct BatchJoinByExternalCommitItem {
+    group_id: String,
+    group_info: Vec<u8>,
     ciphersuite: Ciphersuite,
     join_config: MlsGroupJoinConfig,
-    callback: Option<LogThreadsafeFunction>,
 }
 
 impl_identity_task!(
@@ -1582,8 +1632,8 @@ impl_identity_task!(
                         tx_provider,
                         &this.client_id,
                         &arg.group_info,
-                        this.ciphersuite,
-                        &this.join_config,
+                        arg.ciphersuite,
+                        &arg.join_config,
                         this.public_key.clone(),
                     )
                 }) {
@@ -1965,12 +2015,25 @@ pub struct PendingCreationGroup {
 }
 
 impl UqMls {
-    fn ciphersuite(&self) -> Result<Ciphersuite, Error> {
-        Ok(Ciphersuite::try_from(self.ciphersuite)?)
+    fn require_supported_ciphersuite(
+        &self,
+        ciphersuite: MlsCiphersuite,
+    ) -> Result<Ciphersuite, Error> {
+        self.require_supported_ciphersuite_u16(
+            KchatCiphersuite::from(ciphersuite).to_openmls() as u16
+        )
     }
 
-    fn use_ratchet_tree_extension(&self) -> Result<bool, Error> {
-        Ok(self.use_ratchet_tree_extension && !requires_external_ratchet_tree(self.ciphersuite()?))
+    fn require_supported_ciphersuite_u16(&self, value: u16) -> Result<Ciphersuite, Error> {
+        let ciphersuite = Ciphersuite::try_from(value)?;
+        ensure_supported_ciphersuite(ciphersuite)?;
+        if !self.supported_ciphersuites.contains(&value) {
+            return Err(Error::UnsupportedCiphersuite(format!(
+                "{ciphersuite:?} is not enabled for this instance"
+            )));
+        }
+        core::ensure_ciphersuite_supported(&self.provider, ciphersuite)?;
+        Ok(ciphersuite)
     }
 
     fn wire_format_policy(&self) -> OpenMlsWireFormatPolicy {
@@ -1982,7 +2045,11 @@ impl UqMls {
         }
     }
 
-    fn build_join_config(&self, update: Option<&GroupConfigUpdate>) -> MlsGroupJoinConfig {
+    fn build_join_config_for(
+        &self,
+        ciphersuite: Ciphersuite,
+        update: Option<&GroupConfigUpdate>,
+    ) -> MlsGroupJoinConfig {
         let max_past_epochs = update
             .and_then(|update| update.max_past_epochs)
             .unwrap_or(self.max_past_epochs);
@@ -1996,8 +2063,7 @@ impl UqMls {
         MlsGroupJoinConfig::builder()
             .wire_format_policy(self.wire_format_policy())
             .use_ratchet_tree_extension(
-                self.use_ratchet_tree_extension()
-                    .expect("valid ciphersuite"),
+                self.use_ratchet_tree_extension && !requires_external_ratchet_tree(ciphersuite),
             )
             .max_past_epochs(max_past_epochs as usize)
             .sender_ratchet_configuration(SenderRatchetConfiguration::new(
@@ -2049,6 +2115,7 @@ impl UqMls {
         Ok(Self {
             client_id,
             ciphersuite: DEFAULT_CIPHERSUITE.into(),
+            supported_ciphersuites: [DEFAULT_CIPHERSUITE as u16].into_iter().collect(),
             wire_format_policy: WireFormatPolicy::PureCiphertext,
             use_ratchet_tree_extension: true,
             max_past_epochs,
@@ -2072,6 +2139,32 @@ impl UqMls {
         maximum_forward_distance: u32,
         ciphersuite: MlsCiphersuite,
     ) -> napi::Result<Self> {
+        Self::new_with_ciphersuite_policy(
+            client_id,
+            storage_path,
+            group_storage_path,
+            max_past_epochs,
+            password,
+            out_of_order_tolerance,
+            maximum_forward_distance,
+            ciphersuite,
+            vec![ciphersuite],
+        )
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_ciphersuite_policy(
+        client_id: String,
+        storage_path: String,
+        group_storage_path: String,
+        max_past_epochs: u16,
+        password: Option<String>,
+        out_of_order_tolerance: u32,
+        maximum_forward_distance: u32,
+        preferred_ciphersuite: MlsCiphersuite,
+        supported_ciphersuites: Vec<MlsCiphersuite>,
+    ) -> napi::Result<Self> {
         let mut instance = Self::new(
             client_id,
             storage_path,
@@ -2081,19 +2174,42 @@ impl UqMls {
             out_of_order_tolerance,
             maximum_forward_distance,
         )?;
-        instance.ciphersuite = KchatCiphersuite::from(ciphersuite).to_openmls() as u16;
-        instance.use_ratchet_tree_extension =
-            !requires_external_ratchet_tree(instance.ciphersuite()?);
-        core::ensure_ciphersuite_supported(&instance.provider, instance.ciphersuite()?)
-            .map_err(Error::from)?;
+        instance.supported_ciphersuites = supported_ciphersuites
+            .into_iter()
+            .map(|suite| KchatCiphersuite::from(suite).to_openmls() as u16)
+            .collect();
+        if instance.supported_ciphersuites.is_empty() {
+            return Err(Error::UnsupportedCiphersuite(
+                "at least one ciphersuite must be enabled".to_owned(),
+            )
+            .into());
+        }
+        for suite in instance.supported_ciphersuites.clone() {
+            instance.require_supported_ciphersuite_u16(suite)?;
+        }
+        instance.ciphersuite = KchatCiphersuite::from(preferred_ciphersuite).to_openmls() as u16;
+        instance.require_supported_ciphersuite_u16(instance.ciphersuite)?;
+        instance.use_ratchet_tree_extension = true;
         Ok(instance)
     }
 
     #[napi]
     pub fn generate_signature_key(&self) -> napi::Result<AsyncTask<GenerateSignatureKeyTask>> {
+        self.generate_signature_key_for(
+            KchatCiphersuite::from_u16(self.ciphersuite)
+                .map_err(Error::from)?
+                .into(),
+        )
+    }
+
+    #[napi]
+    pub fn generate_signature_key_for(
+        &self,
+        ciphersuite: MlsCiphersuite,
+    ) -> napi::Result<AsyncTask<GenerateSignatureKeyTask>> {
         Ok(AsyncTask::new(GenerateSignatureKeyTask {
             provider: self.provider.clone(),
-            ciphersuite: self.ciphersuite()?,
+            ciphersuite: self.require_supported_ciphersuite(ciphersuite)?,
         }))
     }
 
@@ -2104,10 +2220,28 @@ impl UqMls {
         last_resort: bool,
         public_key: Option<Vec<u8>>,
     ) -> napi::Result<AsyncTask<GenerateKeyPackagesTask>> {
+        self.generate_key_packages_for(
+            KchatCiphersuite::from_u16(self.ciphersuite)
+                .map_err(Error::from)?
+                .into(),
+            quantity,
+            last_resort,
+            public_key,
+        )
+    }
+
+    #[napi]
+    pub fn generate_key_packages_for(
+        &self,
+        ciphersuite: MlsCiphersuite,
+        quantity: u16,
+        last_resort: bool,
+        public_key: Option<Vec<u8>>,
+    ) -> napi::Result<AsyncTask<GenerateKeyPackagesTask>> {
         Ok(AsyncTask::new(GenerateKeyPackagesTask {
             client_id: self.client_id.clone(),
             provider: self.provider.clone(),
-            ciphersuite: self.ciphersuite()?,
+            ciphersuite: self.require_supported_ciphersuite(ciphersuite)?,
             quantity,
             last_resort,
             public_key,
@@ -2121,8 +2255,26 @@ impl UqMls {
         public_key: Option<Vec<u8>>,
         callback: Option<Function<'_, FnArgs<(String,)>, ()>>,
     ) -> napi::Result<AsyncTask<CreateGroupTask>> {
+        self.create_group_with_ciphersuite(
+            group_id,
+            KchatCiphersuite::from_u16(self.ciphersuite)
+                .map_err(Error::from)?
+                .into(),
+            public_key,
+            callback,
+        )
+    }
+
+    #[napi]
+    pub fn create_group_with_ciphersuite(
+        &self,
+        group_id: String,
+        ciphersuite: MlsCiphersuite,
+        public_key: Option<Vec<u8>>,
+        callback: Option<Function<'_, FnArgs<(String,)>, ()>>,
+    ) -> napi::Result<AsyncTask<CreateGroupTask>> {
         let callback = build_log_callback(callback)?;
-        let ciphersuite = self.ciphersuite()?;
+        let ciphersuite = self.require_supported_ciphersuite(ciphersuite)?;
         Ok(AsyncTask::new(CreateGroupTask {
             conn: self.conn.clone(),
             provider: self.provider.clone(),
@@ -2173,10 +2325,15 @@ impl UqMls {
         welcome: Vec<u8>,
         callback: Option<Function<'_, FnArgs<(String,)>, ()>>,
     ) -> napi::Result<AsyncTask<ProcessWelcomeTask>> {
+        let ciphersuite = core::welcome_ciphersuite(&welcome).map_err(Error::from)?;
+        self.require_supported_ciphersuite_u16(ciphersuite as u16)?;
+        if requires_external_ratchet_tree(ciphersuite) {
+            return Err(Error::ExternalRatchetTreeRequired.into());
+        }
         Ok(AsyncTask::new(ProcessWelcomeTask {
             provider: self.provider.clone(),
             welcome,
-            join_config: self.build_join_config(None),
+            join_config: self.build_join_config_for(ciphersuite, None),
             callback: build_log_callback(callback)?,
         }))
     }
@@ -2188,11 +2345,16 @@ impl UqMls {
         ratchet_tree: Vec<u8>,
         callback: Option<Function<'_, FnArgs<(String,)>, ()>>,
     ) -> napi::Result<AsyncTask<ProcessWelcomeWithRatchetTreeTask>> {
+        let ciphersuite = core::welcome_ciphersuite(&welcome).map_err(Error::from)?;
+        self.require_supported_ciphersuite_u16(ciphersuite as u16)?;
+        if !requires_external_ratchet_tree(ciphersuite) {
+            return Err(Error::ExternalRatchetTreeNotRequired.into());
+        }
         Ok(AsyncTask::new(ProcessWelcomeWithRatchetTreeTask {
             provider: self.provider.clone(),
             welcome,
             ratchet_tree,
-            join_config: self.build_join_config(None),
+            join_config: self.build_join_config_for(ciphersuite, None),
             callback: build_log_callback(callback)?,
         }))
     }
@@ -2203,10 +2365,13 @@ impl UqMls {
         group_id: String,
         update: GroupConfigUpdate,
     ) -> napi::Result<AsyncTask<UpdateGroupConfigTask>> {
+        let ciphersuite = core::group_context(&self.provider, &group_id)
+            .map_err(Error::from)?
+            .ciphersuite();
         Ok(AsyncTask::new(UpdateGroupConfigTask {
             provider: self.provider.clone(),
             group_id,
-            join_config: self.build_join_config(Some(&update)),
+            join_config: self.build_join_config_for(ciphersuite, Some(&update)),
         }))
     }
 
@@ -2315,7 +2480,8 @@ impl UqMls {
         public_key: Option<Vec<u8>>,
         callback: Option<Function<'_, FnArgs<(String,)>, ()>>,
     ) -> napi::Result<AsyncTask<JoinByExternalCommitTask>> {
-        let ciphersuite = self.ciphersuite()?;
+        let ciphersuite = core::group_info_ciphersuite(&group_info).map_err(Error::from)?;
+        self.require_supported_ciphersuite_u16(ciphersuite as u16)?;
         Ok(AsyncTask::new(JoinByExternalCommitTask {
             conn: self.conn.clone(),
             provider: self.provider.clone(),
@@ -2324,7 +2490,7 @@ impl UqMls {
             group_info,
             public_key,
             ciphersuite,
-            join_config: self.build_join_config(None),
+            join_config: self.build_join_config_for(ciphersuite, None),
             callback: build_log_callback(callback)?,
         }))
     }
@@ -2336,15 +2502,26 @@ impl UqMls {
         public_key: Option<Vec<u8>>,
         callback: Option<Function<'_, FnArgs<(String,)>, ()>>,
     ) -> napi::Result<AsyncTask<BatchJoinByExternalCommitTask>> {
-        let ciphersuite = self.ciphersuite()?;
+        let args = args
+            .into_iter()
+            .map(|arg| {
+                let ciphersuite =
+                    core::group_info_ciphersuite(&arg.group_info).map_err(Error::from)?;
+                self.require_supported_ciphersuite_u16(ciphersuite as u16)?;
+                Ok(BatchJoinByExternalCommitItem {
+                    group_id: arg.group_id,
+                    group_info: arg.group_info,
+                    ciphersuite,
+                    join_config: self.build_join_config_for(ciphersuite, None),
+                })
+            })
+            .collect::<napi::Result<Vec<_>>>()?;
         Ok(AsyncTask::new(BatchJoinByExternalCommitTask {
             conn: self.conn.clone(),
             provider: self.provider.clone(),
             client_id: self.client_id.clone(),
             args,
             public_key,
-            ciphersuite,
-            join_config: self.build_join_config(None),
             callback: build_log_callback(callback)?,
         }))
     }
@@ -2568,20 +2745,12 @@ impl UqMls {
             conn: self.conn.clone(),
             provider: self.provider.clone(),
             args: Some(build_process_all_messages_args(args)?),
-            join_config: Some(
-                MlsGroupJoinConfig::builder()
-                    .wire_format_policy(self.wire_format_policy())
-                    .use_ratchet_tree_extension(
-                        self.use_ratchet_tree_extension()
-                            .expect("valid ciphersuite"),
-                    )
-                    .max_past_epochs(self.max_past_epochs as usize)
-                    .sender_ratchet_configuration(SenderRatchetConfiguration::new(
-                        self.out_of_order_tolerance,
-                        self.maximum_forward_distance,
-                    ))
-                    .build(),
-            ),
+            wire_format_policy: self.wire_format_policy,
+            use_ratchet_tree_extension: self.use_ratchet_tree_extension,
+            max_past_epochs: self.max_past_epochs,
+            out_of_order_tolerance: self.out_of_order_tolerance,
+            maximum_forward_distance: self.maximum_forward_distance,
+            supported_ciphersuites: self.supported_ciphersuites.clone(),
             callback,
         }))
     }

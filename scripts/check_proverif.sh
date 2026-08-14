@@ -27,10 +27,10 @@ require_outcomes() {
 require_xwing_combined_wire_model() {
   local model="$1"
 
-  rg -q 'let xwing_pk = xwing_public\(' "$model"
-  rg -q 'xwing_encaps\(xwing_pk, coins\)' "$model"
-  ! rg -q 'classical_kem_(pk|sk|private|public|encrypt|decrypt)' "$model"
-  ! rg -q 'mlkem_(private|public|encaps|decaps|shared)' "$model"
+  grep -Eq 'let xwing_pk = xwing_public\(' "$model"
+  grep -Eq 'xwing_encaps\(xwing_pk, coins\)' "$model"
+  ! grep -Eq 'classical_kem_(pk|sk|private|public|encrypt|decrypt)' "$model"
+  ! grep -Eq 'mlkem_(private|public|encaps|decaps|shared)' "$model"
 }
 
 proverif -help >/dev/null 2>&1 || :

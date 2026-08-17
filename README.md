@@ -24,6 +24,12 @@ kchat-mls-uniffi ─┐
 kchat-mls-napi  ─┘
 ```
 
+## About KChat
+
+KChat is a secure and private messaging app by Uney GmbH. It gives people and communities a place to connect without sacrificing privacy — no phone number required, minimum data harvesting, and end-to-end encryption by default using MLS.
+
+This SDK is the Rust core that implements KChat's MLS-based encryption layer, shared across iOS, Android, and Node.js via cross-language bindings.
+
 ## Prerequisites
 
 - **Rust** (latest stable) via [rustup](https://rustup.rs/), with `edition = "2024"` support.
@@ -140,7 +146,11 @@ disclosure process in [`SECURITY.md`](./SECURITY.md).
 
 ## License
 
-Copyright (c) 2025 KChat.com.
+© Uney GmbH. All rights reserved by the original licensor and used under license to Uney GmbH.
+
+<https://uney.com>
+
+Grafenaustrasse 13, 6300 Zug, Switzerland
 
 Licensed under either of
 

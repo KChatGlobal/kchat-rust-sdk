@@ -1,0 +1,50 @@
+(* Positive model: full-PQ external-tree onboarding.
+   The signed GroupInfo binds (group_id, epoch, tree_hash); the Welcome is
+   protected with an idealised ML-KEM-derived key. *)
+
+free c: channel.
+free group_id: bitstring [private].
+free epoch: bitstring [private].
+free application_key: bitstring [private].
+
+event CommitMerged(bitstring, bitstring, bitstring).
+event TreeExported(bitstring, bitstring, bitstring).
+event JoinAccepted(bitstring, bitstring, bitstring).
+
+query attacker(application_key).
+query group: bitstring, current_epoch: bitstring, current_tree_hash: bitstring;
+  inj-event(JoinAccepted(group, current_epoch, current_tree_hash)) ==>
+  inj-event(CommitMerged(group, current_epoch, current_tree_hash)).
+query group: bitstring, current_epoch: bitstring, current_tree_hash: bitstring;
+  inj-event(JoinAccepted(group, current_epoch, current_tree_hash)) ==>
+  inj-event(TreeExported(group, current_epoch, current_tree_hash)).
+
+let GroupCreator(joiner_kem_pk: kem_pk, signer: sig_sk) =
+  new tree: bitstring;
+  new coins: bitstring;
+  let current_tree_hash = tree_hash(tree) in
+  event CommitMerged(group_id, epoch, current_tree_hash);
+  event TreeExported(group_id, epoch, current_tree_hash);
+  let info = group_info(group_id, epoch, current_tree_hash) in
+  let signed_info = mldsa_sign(info, signer) in
+  let ciphertext = mlkem_encaps(joiner_kem_pk, coins) in
+  let welcome_key = mlkem_shared(joiner_kem_pk, coins) in
+  let encrypted_key = welcome_encrypt(welcome_key, application_key, info) in
+  out(c, (signed_info, ciphertext, encrypted_key, tree)).
+
+let Joiner(joiner_kem_sk: kem_sk, signer_pk: sig_pk) =
+  in(c, (signed_info: signature, ciphertext: kem_ct,
+         encrypted_key: bitstring, received_tree: bitstring));
+  let info = mldsa_verify(signed_info, signer_pk) in
+  if group_id = group_info_group_id(info) then
+    if epoch = group_info_epoch(info) then
+      if tree_hash(received_tree) = group_info_tree_hash(info) then
+        let welcome_key = mlkem_decaps(ciphertext, joiner_kem_sk) in
+        if application_key = welcome_decrypt(welcome_key, encrypted_key, info) then
+          event JoinAccepted(group_id, epoch, tree_hash(received_tree)).
+
+process
+  new joiner_kem_sk: kem_sk;
+  new signer: sig_sk;
+  (GroupCreator(mlkem_public(joiner_kem_sk), signer) |
+   Joiner(joiner_kem_sk, mldsa_public(signer)))

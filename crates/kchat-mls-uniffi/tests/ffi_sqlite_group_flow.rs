@@ -4,7 +4,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use mls_mobile_sdk_rs::mls::{AddMembersResult, RemoveMembersResult, UpdateLeafNodeResult, UqMls};
+use mls_mobile_sdk_rs::{
+    error::Error,
+    mls::{AddMembersResult, MlsCiphersuite, RemoveMembersResult, UpdateLeafNodeResult, UqMls},
+};
 
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -65,6 +68,36 @@ impl TestClient {
             config: self.config.clone(),
             api,
         }
+    }
+
+    fn with_ciphersuite_policy(
+        test_name: &str,
+        client_id: &str,
+        preferred: MlsCiphersuite,
+        supported: Vec<MlsCiphersuite>,
+    ) -> Self {
+        let unique = unique_name(test_name, client_id);
+        let config = TestClientConfig {
+            client_id: client_id.to_owned(),
+            storage_path: db_path(&format!("{unique}-mls")),
+            group_storage_path: db_path(&format!("{unique}-group-status")),
+        };
+
+        let api = UqMls::new_with_ciphersuite_policy(
+            config.client_id.clone(),
+            config.storage_path.clone(),
+            config.group_storage_path.clone(),
+            MAX_PAST_EPOCHS,
+            None,
+            OUT_OF_ORDER_TOLERANCE,
+            MAXIMUM_FORWARD_DISTANCE,
+            preferred,
+            supported,
+            None,
+        )
+        .expect("should create policy-backed UqMls");
+
+        Self { config, api }
     }
 }
 
@@ -132,6 +165,17 @@ fn generate_one_key_package(client: &TestClient) -> Vec<u8> {
         .api
         .generate_key_packages(1, false, None)
         .expect("should generate one key package")
+        .key_packages
+        .into_iter()
+        .next()
+        .expect("should return one key package")
+}
+
+fn generate_one_key_package_for(client: &TestClient, ciphersuite: MlsCiphersuite) -> Vec<u8> {
+    client
+        .api
+        .generate_key_packages_for(ciphersuite, 1, false, None)
+        .expect("should generate one suite-specific key package")
         .key_packages
         .into_iter()
         .next()
@@ -212,6 +256,114 @@ fn create_group_and_add_member_round_trip() {
     let bob_reopened = bob.reopen();
 
     assert_group_sync(&alice_reopened, &bob_reopened, group_id, &["alice", "bob"]);
+}
+
+#[test]
+fn one_instance_creates_groups_in_multiple_supported_ciphersuites() {
+    let alice = TestClient::with_ciphersuite_policy(
+        "one_instance_creates_groups_in_multiple_supported_ciphersuites",
+        "alice",
+        MlsCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
+        vec![
+            MlsCiphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
+            MlsCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
+        ],
+    );
+
+    alice
+        .api
+        .create_group_with_ciphersuite(
+            "multi-suite-classic",
+            MlsCiphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
+            None,
+        )
+        .expect("should create a classic group");
+    alice
+        .api
+        .create_group_with_ciphersuite(
+            "multi-suite-xwing",
+            MlsCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
+            None,
+        )
+        .expect("should create an XWing group");
+
+    assert!(
+        alice
+            .api
+            .group_epoch("multi-suite-classic")
+            .unwrap()
+            .err
+            .is_none()
+    );
+    assert!(
+        alice
+            .api
+            .group_epoch("multi-suite-xwing")
+            .unwrap()
+            .err
+            .is_none()
+    );
+}
+
+#[test]
+fn welcome_join_uses_the_welcome_ciphersuite_not_the_preferred_ciphersuite() {
+    let all_suites = vec![
+        MlsCiphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
+        MlsCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
+        MlsCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87,
+    ];
+    let alice = TestClient::with_ciphersuite_policy(
+        "welcome_join_uses_the_welcome_ciphersuite_not_the_preferred_ciphersuite",
+        "alice",
+        MlsCiphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
+        all_suites.clone(),
+    );
+    let bob = TestClient::with_ciphersuite_policy(
+        "welcome_join_uses_the_welcome_ciphersuite_not_the_preferred_ciphersuite",
+        "bob",
+        MlsCiphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519,
+        all_suites,
+    );
+    let group_id = "multi-suite-full-pq-welcome";
+    let bob_key_package = generate_one_key_package_for(
+        &bob,
+        MlsCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87,
+    );
+
+    alice
+        .api
+        .create_group_with_ciphersuite(
+            group_id,
+            MlsCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87,
+            None,
+        )
+        .expect("alice should create a full-PQ group");
+    let add = alice
+        .api
+        .add_members(group_id, &[bob_key_package])
+        .expect("alice should add bob");
+    alice
+        .api
+        .merge_pending_commit(group_id)
+        .expect("alice should merge the full-PQ add");
+    let tree = alice
+        .api
+        .export_ratchet_tree(group_id)
+        .expect("alice should export the full-PQ tree after merge");
+
+    assert!(matches!(
+        bob.api.process_welcome(&add.welcome),
+        Err(Error::ExternalRatchetTreeRequired)
+    ));
+
+    bob.api
+        .process_welcome_with_ratchet_tree(&add.welcome, &tree)
+        .expect("bob should join using the suite selected by the Welcome");
+
+    assert_eq!(
+        bob.api.group_ciphersuite(group_id).unwrap(),
+        MlsCiphersuite::MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87
+    );
 }
 
 #[test]

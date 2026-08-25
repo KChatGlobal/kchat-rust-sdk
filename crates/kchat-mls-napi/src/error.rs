@@ -52,6 +52,10 @@ pub enum Error {
     CreationFromExternal(String),
     #[error("Missing ratchet tree error")]
     MissingRatchetTree,
+    #[error("External ratchet tree is required for this ciphersuite")]
+    ExternalRatchetTreeRequired,
+    #[error("External ratchet tree is not supported for this ciphersuite")]
+    ExternalRatchetTreeNotRequired,
     #[error("Credential is existed.")]
     CredentialIsExisted,
     #[error("Remove members error: {0}")]
@@ -92,6 +96,8 @@ pub enum Error {
     CommitBuilderStage(String),
     #[error("Proposal error: {0}")]
     Proposal(String),
+    #[error("Unsupported ciphersuite: {0}")]
+    UnsupportedCiphersuite(String),
 }
 
 impl Error {
@@ -123,6 +129,8 @@ impl Error {
             Error::ExternalCommit(_) => "EXTERNAL_COMMIT_ERROR",
             Error::CreationFromExternal(_) => "CREATION_FROM_EXTERNAL_ERROR",
             Error::MissingRatchetTree => "MISSING_RATCHET_TREE",
+            Error::ExternalRatchetTreeRequired => "EXTERNAL_RATCHET_TREE_REQUIRED",
+            Error::ExternalRatchetTreeNotRequired => "EXTERNAL_RATCHET_TREE_NOT_REQUIRED",
             Error::CredentialIsExisted => "CREDENTIAL_ALREADY_EXISTED",
             Error::RemoveMembers(_) => "REMOVE_MEMBERS_ERROR",
             Error::CommitToPendingProposals(_) => "COMMIT_TO_PENDING_PROPOSALS_ERROR",
@@ -143,6 +151,7 @@ impl Error {
             Error::ReAdd(_) => "RE_ADD_ERROR",
             Error::CommitBuilderStage(_) => "COMMIT_BUILDER_STAGE_ERROR",
             Error::Proposal(_) => "PROPOSAL_ERROR",
+            Error::UnsupportedCiphersuite(_) => "UNSUPPORTED_CIPHERSUITE",
         }
     }
 
@@ -153,9 +162,12 @@ impl Error {
             | Error::InvalidApplicationMessage
             | Error::InvalidProposalMessage
             | Error::InvalidGroupInfo
+            | Error::UnsupportedCiphersuite(_)
             | Error::ExportGroupInfoInvalidExportType
             | Error::KeyPackageVerify(_)
             | Error::MissingRatchetTree
+            | Error::ExternalRatchetTreeRequired
+            | Error::ExternalRatchetTreeNotRequired
             | Error::Deserialize => napi::Status::InvalidArg,
             _ => napi::Status::GenericFailure,
         }
@@ -222,6 +234,7 @@ impl From<uq_openmls::error::Error> for Error {
             MlsError::ReAdd(e) => Self::ReAdd(e),
             MlsError::CommitBuilderStage(e) => Self::CommitBuilderStage(e),
             MlsError::Proposal(e) => Self::Proposal(e),
+            MlsError::UnsupportedCiphersuite(e) => Self::UnsupportedCiphersuite(e),
         }
     }
 }

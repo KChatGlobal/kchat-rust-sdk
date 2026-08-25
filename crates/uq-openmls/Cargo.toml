@@ -14,7 +14,7 @@ categories.workspace = true
 openmls = { workspace = true, features = ["fork-resolution"] }
 openmls_basic_credential = { workspace = true }
 openmls_traits = { workspace = true }
-openmls_rust_crypto = { workspace = true }
+openmls_libcrux_crypto = { workspace = true }
 kchat_storage_provider = { path = "../kchat-storage-provider" }
 
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
@@ -32,5 +32,11 @@ extensions-draft-08 = [
 
 [dev-dependencies]
 openmls = { workspace = true, features = ["fork-resolution", "libcrux-provider", "test-utils"] }
+openmls_basic_credential = { workspace = true, features = ["test-utils"] }
+openmls_rust_crypto = { workspace = true }
 criterion = { workspace = true }
-openmls_sqlite_storage = { git = "https://github.com:443/KChatGlobal/openmls.git", branch = "main" }
+openmls_sqlite_storage = { version = "0.2.0" }
+
+[[bench]]
+name = "pq_group_sizes"
+harness = false

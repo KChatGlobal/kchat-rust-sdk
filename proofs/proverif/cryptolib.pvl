@@ -1,0 +1,93 @@
+(* Ideal symbolic primitives shared by the KChat full-PQ MLS onboarding models.
+   The ML-KEM and ML-DSA names denote the security assumptions in scope; this
+   file does not model quantum computation or concrete algorithm internals. *)
+
+type symkey.
+type kem_sk.
+type kem_pk.
+type kem_ct.
+type xwing_sk.
+type xwing_pk.
+type xwing_ct.
+type sig_sk.
+type sig_pk.
+type signature.
+type classical_kem_sk.
+type classical_kem_pk.
+type classical_kem_ct.
+type classical_sig_sk.
+type classical_sig_pk.
+
+fun mlkem_public(kem_sk): kem_pk.
+fun mlkem_encaps(kem_pk, bitstring): kem_ct.
+fun mlkem_shared(kem_pk, bitstring): symkey.
+fun mlkem_decaps(kem_ct, kem_sk): symkey
+reduc forall sk: kem_sk, coins: bitstring;
+  mlkem_decaps(mlkem_encaps(mlkem_public(sk), coins), sk) =
+    mlkem_shared(mlkem_public(sk), coins).
+
+(* XWing is represented as one combined KEM public key and one combined KEM
+   ciphertext.  Its two component secrets remain internal to the KEM. *)
+fun xwing_public(xwing_sk): xwing_pk.
+fun xwing_encaps(xwing_pk, bitstring): xwing_ct.
+fun xwing_pq_component(xwing_pk, bitstring): symkey.
+fun xwing_classical_component(xwing_pk, bitstring): symkey.
+fun xwing_combine(symkey, symkey): symkey.
+fun xwing_decaps(xwing_ct, xwing_sk): symkey
+reduc forall sk: xwing_sk, coins: bitstring;
+  xwing_decaps(xwing_encaps(xwing_public(sk), coins), sk) =
+    xwing_combine(xwing_pq_component(xwing_public(sk), coins),
+                  xwing_classical_component(xwing_public(sk), coins)).
+
+(* This abstracts Shor breaking XWing's X25519 component from the single
+   serialized XWing encapsulation.  It deliberately does not expose the
+   ML-KEM component or the final XWing shared secret. *)
+fun shor_break_xwing_classical(xwing_ct, xwing_pk): symkey
+reduc forall sk: xwing_sk, coins: bitstring;
+  shor_break_xwing_classical(xwing_encaps(xwing_public(sk), coins),
+                             xwing_public(sk)) =
+    xwing_classical_component(xwing_public(sk), coins).
+
+fun mldsa_public(sig_sk): sig_pk.
+fun mldsa_sign(bitstring, sig_sk): signature.
+fun mldsa_verify(signature, sig_pk): bitstring
+reduc forall message: bitstring, sk: sig_sk;
+  mldsa_verify(mldsa_sign(message, sk), mldsa_public(sk)) = message.
+
+fun tree_hash(bitstring): bitstring.
+fun group_info(bitstring, bitstring, bitstring): bitstring.
+fun group_info_group_id(bitstring): bitstring
+reduc forall group_id: bitstring, epoch: bitstring, current_tree_hash: bitstring;
+  group_info_group_id(group_info(group_id, epoch, current_tree_hash)) = group_id.
+fun group_info_epoch(bitstring): bitstring
+reduc forall group_id: bitstring, epoch: bitstring, current_tree_hash: bitstring;
+  group_info_epoch(group_info(group_id, epoch, current_tree_hash)) = epoch.
+fun group_info_tree_hash(bitstring): bitstring
+reduc forall group_id: bitstring, epoch: bitstring, current_tree_hash: bitstring;
+  group_info_tree_hash(group_info(group_id, epoch, current_tree_hash)) = current_tree_hash.
+
+fun welcome_encrypt(symkey, bitstring, bitstring): bitstring.
+fun welcome_decrypt(symkey, bitstring, bitstring): bitstring
+reduc forall encryption_key: symkey, plaintext: bitstring, associated_data: bitstring;
+  welcome_decrypt(encryption_key,
+                  welcome_encrypt(encryption_key, plaintext, associated_data),
+                  associated_data) = plaintext.
+
+(* Explicit symbolic Shor oracle for comparison models only. *)
+fun classical_kem_public(classical_kem_sk): classical_kem_pk.
+fun classical_kem_encrypt(classical_kem_pk, bitstring): classical_kem_ct.
+fun classical_kem_decrypt(classical_kem_ct, classical_kem_sk): bitstring
+reduc forall sk: classical_kem_sk, plaintext: bitstring;
+  classical_kem_decrypt(classical_kem_encrypt(classical_kem_public(sk), plaintext), sk) = plaintext.
+fun quantum_break_kem(classical_kem_pk): classical_kem_sk
+reduc forall sk: classical_kem_sk;
+  quantum_break_kem(classical_kem_public(sk)) = sk.
+
+fun classical_sig_public(classical_sig_sk): classical_sig_pk.
+fun classical_sign(bitstring, classical_sig_sk): signature.
+fun classical_verify(signature, classical_sig_pk): bitstring
+reduc forall message: bitstring, sk: classical_sig_sk;
+  classical_verify(classical_sign(message, sk), classical_sig_public(sk)) = message.
+fun quantum_break_signature(classical_sig_pk): classical_sig_sk
+reduc forall sk: classical_sig_sk;
+  quantum_break_signature(classical_sig_public(sk)) = sk.

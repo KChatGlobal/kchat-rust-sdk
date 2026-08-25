@@ -10,15 +10,18 @@ use openmls::{
         BasicCredential, Capabilities, Ciphersuite, ExtensionType, KeyPackage, KeyPackageIn,
         KeyPackageVerifyError, LeafNodeIndex, LeafNodeParameters, Lifetime, MlsMessageBodyIn,
         MlsMessageBodyOut, MlsMessageIn, ProcessedMessageContent, Proposal as OpenMlsProposal,
-        ProtocolMessage, ProtocolVersion, Sender,
+        ProtocolMessage, ProtocolVersion, RatchetTreeIn, Sender,
         group_info::VerifiableGroupInfo,
         tls_codec::{Deserialize as _, Serialize as _},
     },
 };
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_traits::{OpenMlsProvider, public_storage::PublicStorageProvider};
+use openmls_traits::{
+    OpenMlsProvider, crypto::OpenMlsCrypto, public_storage::PublicStorageProvider,
+};
 
 use crate::{
+    ciphersuite::ensure_supported_ciphersuite as ensure_sdk_ciphersuite_supported,
     error::Error,
     util::{
         find_members_by_identity, get_credential_with_key, get_identity_from_key_packages,
@@ -31,6 +34,59 @@ pub const DEFAULT_CIPHERSUITE: Ciphersuite =
 
 fn protocol_message(message: &[u8]) -> Result<ProtocolMessage, Error> {
     Ok(MlsMessageIn::tls_deserialize_exact(message)?.try_into_protocol_message()?)
+}
+
+const MLS_PROTOCOL_VERSION_BYTES: [u8; 2] = [0x00, 0x01];
+const MLS_WELCOME_WIRE_FORMAT_BYTES: [u8; 2] = [0x00, 0x03];
+const MLS_MESSAGE_HEADER_LEN: usize = 4;
+const MLS_CIPHERSUITE_LEN: usize = 2;
+
+fn decode_welcome_ciphersuite_header(welcome: &[u8]) -> Result<Ciphersuite, Error> {
+    let header_len = MLS_MESSAGE_HEADER_LEN + MLS_CIPHERSUITE_LEN;
+    if welcome.len() < header_len
+        || welcome[..2] != MLS_PROTOCOL_VERSION_BYTES
+        || welcome[2..4] != MLS_WELCOME_WIRE_FORMAT_BYTES
+    {
+        return Err(Error::InvalidWelcomeMessage);
+    }
+
+    let value = u16::from_be_bytes([welcome[4], welcome[5]]);
+    Ciphersuite::try_from(value).map_err(|err| Error::UnsupportedCiphersuite(err.to_string()))
+}
+
+/// Returns the ciphersuite carried in the public header of a Welcome message.
+///
+/// The full MLS message is deserialized first so callers cannot route local
+/// onboarding configuration based on a truncated or non-Welcome artifact.
+pub fn welcome_ciphersuite(welcome: &[u8]) -> Result<Ciphersuite, Error> {
+    let message = MlsMessageIn::tls_deserialize_exact(welcome)?;
+    if !matches!(message.extract(), MlsMessageBodyIn::Welcome(_)) {
+        return Err(Error::InvalidWelcomeMessage);
+    }
+
+    let ciphersuite = decode_welcome_ciphersuite_header(welcome)?;
+    ensure_sdk_ciphersuite_supported(ciphersuite)?;
+    Ok(ciphersuite)
+}
+
+/// Returns the ciphersuite of a GroupInfo artifact, accepting either its bare
+/// TLS form or an MLSMessage wrapper.
+pub fn group_info_ciphersuite(group_info: &[u8]) -> Result<Ciphersuite, Error> {
+    let group_info = if let Ok(group_info) = VerifiableGroupInfo::tls_deserialize_exact(group_info)
+    {
+        group_info
+    } else if let Ok(message) = MlsMessageIn::tls_deserialize_exact(group_info) {
+        let MlsMessageBodyIn::GroupInfo(group_info) = message.extract() else {
+            return Err(Error::InvalidGroupInfo);
+        };
+        group_info
+    } else {
+        return Err(Error::InvalidGroupInfo);
+    };
+
+    let ciphersuite = group_info.ciphersuite();
+    ensure_sdk_ciphersuite_supported(ciphersuite)?;
+    Ok(ciphersuite)
 }
 
 fn protocol_message_epochs<'a, Messages>(messages: Messages) -> Result<Vec<GroupEpoch>, Error>
@@ -57,11 +113,23 @@ pub fn group_signer<Provider: OpenMlsProvider>(
     get_own_signature_key_from_group(group, provider)
 }
 
+pub fn ensure_ciphersuite_supported<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    ciphersuite: Ciphersuite,
+) -> Result<(), Error> {
+    provider
+        .crypto()
+        .supports(ciphersuite)
+        .map_err(|_| Error::UnsupportedCiphersuite(format!("{ciphersuite:?}")))
+}
+
 /// Generate a new signature keypair.
 pub fn generate_signature_key<Provider: OpenMlsProvider>(
     provider: &Provider,
     ciphersuite: Ciphersuite,
 ) -> Result<SignatureKeyPair, Error> {
+    ensure_ciphersuite_supported(provider, ciphersuite)?;
+
     let signer = SignatureKeyPair::new(ciphersuite.signature_algorithm())?;
     signer
         .store(provider.storage())
@@ -82,10 +150,18 @@ pub fn generate_key_package<Provider: OpenMlsProvider>(
     last_resort: bool,
     public_key: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, Error> {
+    ensure_ciphersuite_supported(provider, ciphersuite)?;
+
     let (credential_with_key, signer) =
         get_credential_with_key(user_id, provider, ciphersuite, public_key)?;
 
-    let mut key_package_builder = KeyPackage::builder();
+    let mut key_package_builder = KeyPackage::builder().leaf_node_capabilities(Capabilities::new(
+        None,
+        Some(&[ciphersuite]),
+        None,
+        None,
+        None,
+    ));
 
     if last_resort {
         key_package_builder = key_package_builder
@@ -118,6 +194,8 @@ pub fn create_group<Provider: OpenMlsProvider>(
     config: &MlsGroupCreateConfig,
     public_key: Option<Vec<u8>>,
 ) -> Result<MlsGroup, Error> {
+    ensure_ciphersuite_supported(provider, ciphersuite)?;
+
     let (creator_credential, signer) =
         get_credential_with_key(creator_id, provider, ciphersuite, public_key)?;
 
@@ -223,6 +301,33 @@ pub fn process_welcome<Provider: OpenMlsProvider>(
         .build()?;
 
     Ok(staged_welcome.into_group(provider)?)
+}
+
+pub fn process_welcome_with_ratchet_tree<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    welcome: &[u8],
+    config: &MlsGroupJoinConfig,
+    ratchet_tree: &[u8],
+) -> Result<MlsGroup, Error> {
+    let welcome = MlsMessageIn::tls_deserialize_exact(welcome)?;
+    let MlsMessageBodyIn::Welcome(welcome) = welcome.extract() else {
+        return Err(Error::InvalidWelcomeMessage);
+    };
+    let ratchet_tree = RatchetTreeIn::tls_deserialize_exact(ratchet_tree)?;
+
+    let staged_welcome = StagedWelcome::build_from_welcome(provider, config, welcome)?
+        .with_ratchet_tree(ratchet_tree)
+        .replace_old_group()
+        .skip_lifetime_validation()
+        .build()?;
+
+    Ok(staged_welcome.into_group(provider)?)
+}
+
+pub fn export_ratchet_tree(group: &MlsGroup) -> Result<Vec<u8>, Error> {
+    let ratchet_tree: RatchetTreeIn = group.export_ratchet_tree().into();
+
+    Ok(ratchet_tree.tls_serialize_detached()?)
 }
 
 #[derive(Debug)]
@@ -966,4 +1071,19 @@ pub fn readd<Provider: OpenMlsProvider>(
         current_epoch: group.epoch().as_u64(),
         pre_tree_hash,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_public_ciphersuite_from_welcome_wire_header() {
+        let welcome = [0x00, 0x01, 0x00, 0x03, 0x00, 0x4d];
+
+        assert_eq!(
+            decode_welcome_ciphersuite_header(&welcome).unwrap(),
+            Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519
+        );
+    }
 }

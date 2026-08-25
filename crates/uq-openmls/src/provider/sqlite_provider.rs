@@ -15,7 +15,7 @@ use openmls::{
     group::{GroupId, MlsGroup},
     prelude::OpenMlsProvider,
 };
-use openmls_rust_crypto::RustCrypto;
+use openmls_libcrux_crypto::CryptoProvider;
 use rusqlite::Connection;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Serialize, de::DeserializeOwned};
@@ -43,21 +43,21 @@ impl Codec for JsonCodec {
 }
 
 pub struct SqliteProvider {
-    crypto: RustCrypto,
+    crypto: CryptoProvider,
     mls_storage: SqliteStorageProvider<JsonCodec>,
 }
 
 impl Clone for SqliteProvider {
     fn clone(&self) -> Self {
         Self {
-            crypto: self.crypto.clone(),
+            crypto: CryptoProvider::new().expect("libcrux crypto provider should initialize"),
             mls_storage: self.mls_storage.clone(),
         }
     }
 }
 
 pub struct TransactionalSqliteProvider<'tx> {
-    crypto: &'tx RustCrypto,
+    crypto: &'tx CryptoProvider,
     mls_storage: TransactionalStorageProvider<'tx, JsonCodec>,
 }
 
@@ -143,7 +143,7 @@ impl SqliteProvider {
         ));
 
         let provider = Self {
-            crypto: RustCrypto::default(),
+            crypto: CryptoProvider::new()?,
             mls_storage,
         };
         emit(format!(
@@ -245,8 +245,8 @@ impl SqliteProvider {
 }
 
 impl OpenMlsProvider for SqliteProvider {
-    type CryptoProvider = RustCrypto;
-    type RandProvider = RustCrypto;
+    type CryptoProvider = CryptoProvider;
+    type RandProvider = CryptoProvider;
     type StorageProvider = SqliteStorageProvider<JsonCodec>;
 
     fn storage(&self) -> &Self::StorageProvider {
@@ -263,8 +263,8 @@ impl OpenMlsProvider for SqliteProvider {
 }
 
 impl<'tx> OpenMlsProvider for TransactionalSqliteProvider<'tx> {
-    type CryptoProvider = RustCrypto;
-    type RandProvider = RustCrypto;
+    type CryptoProvider = CryptoProvider;
+    type RandProvider = CryptoProvider;
     type StorageProvider = TransactionalStorageProvider<'tx, JsonCodec>;
 
     fn storage(&self) -> &Self::StorageProvider {

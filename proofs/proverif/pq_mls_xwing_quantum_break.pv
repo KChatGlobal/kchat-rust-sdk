@@ -1,0 +1,26 @@
+(* Partial-break comparison for one XWing KEM.  Shor exposes only the X25519
+   component of its single encapsulation; the ML-KEM component remains ideal. *)
+free c: channel.
+free welcome_ad: bitstring.
+free transcript: bitstring.
+free protected_value: bitstring [private].
+event Signed(bitstring).
+event Accepted(bitstring).
+query attacker(protected_value).
+query message: bitstring; inj-event(Accepted(message)) ==> inj-event(Signed(message)).
+process
+  new xwing_private: xwing_sk;
+  new signing_sk: classical_sig_sk;
+  new coins: bitstring;
+  let xwing_pk = xwing_public(xwing_private) in
+  let signing_pk = classical_sig_public(signing_sk) in
+  let welcome_key =
+    xwing_combine(xwing_pq_component(xwing_pk, coins),
+                  xwing_classical_component(xwing_pk, coins)) in
+  event Signed(transcript);
+  out(c, (xwing_pk, signing_pk,
+          xwing_encaps(xwing_pk, coins),
+          welcome_encrypt(welcome_key, protected_value, welcome_ad),
+          classical_sign(transcript, signing_sk))) |
+  ! in(c, candidate: signature);
+   let message = classical_verify(candidate, signing_pk) in event Accepted(message)

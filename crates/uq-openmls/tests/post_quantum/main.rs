@@ -1,3 +1,5 @@
+#![cfg(feature = "post-quantum-tests")]
+
 use openmls::{
     extensions::Extensions,
     group::{

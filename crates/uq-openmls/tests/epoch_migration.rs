@@ -176,6 +176,26 @@ fn count_rows(connection: &Connection, table_name: &str) -> i64 {
         .expect("should count rows")
 }
 
+fn migration_history_rows(
+    connection: &Connection,
+    table_name: &str,
+) -> Vec<(i64, String, String, String)> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT version, name, applied_on, checksum
+             FROM {table_name}
+             ORDER BY version"
+        ))
+        .expect("should prepare migration history query");
+    statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .expect("should query migration history")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("should collect migration history")
+}
+
 fn legacy_message_secrets_migration_done(db_path: &str) -> bool {
     let connection = Connection::open(db_path).expect("should open sqlite db");
     connection
@@ -339,6 +359,72 @@ fn epoch_migration_creates_schema_for_empty_db() {
     assert!(legacy_message_secrets_migration_done(&db_path_str));
 
     let _ = fs::remove_file(db_path);
+}
+
+#[test]
+fn legacy_kchat_migration_history_is_bootstrapped_without_replaying_schema() {
+    let db_path = temp_db_path();
+    let db_path_str = db_path.to_string_lossy().into_owned();
+
+    {
+        let provider = SqliteProvider::new(&db_path_str, &None).expect("should create provider");
+        let connection = provider
+            .storage()
+            .connection_pool()
+            .checkout()
+            .expect("should get sqlite connection");
+        connection
+            .execute_batch(
+                "ALTER TABLE openmls_group_data
+                 ADD COLUMN legacy_kchat_data_marker INTEGER NOT NULL DEFAULT 0;",
+            )
+            .expect("should add legacy data marker");
+    }
+
+    let connection = Connection::open(&db_path).expect("should open legacy KChat database");
+    connection
+        .execute_batch(
+            "ALTER TABLE kchat_openmls_sqlite_storage_migrations
+             RENAME TO openmls_sqlite_storage_migrations;",
+        )
+        .expect("should restore legacy KChat migration history table name");
+    drop(connection);
+
+    let provider =
+        SqliteProvider::new(&db_path_str, &None).expect("should open migrated KChat database");
+    let connection = provider
+        .storage()
+        .connection_pool()
+        .checkout()
+        .expect("should get sqlite connection");
+
+    assert!(table_exists(
+        &connection,
+        "kchat_openmls_sqlite_storage_migrations"
+    ));
+    assert!(table_exists(
+        &connection,
+        "openmls_sqlite_storage_migrations"
+    ));
+    assert_eq!(
+        count_rows(&connection, "kchat_openmls_sqlite_storage_migrations"),
+        5
+    );
+    assert_eq!(
+        count_rows(&connection, "openmls_sqlite_storage_migrations"),
+        5
+    );
+    assert_eq!(
+        migration_history_rows(&connection, "kchat_openmls_sqlite_storage_migrations"),
+        migration_history_rows(&connection, "openmls_sqlite_storage_migrations"),
+        "bootstrap must preserve the KChat migration history exactly"
+    );
+    assert!(
+        connection
+            .prepare("SELECT legacy_kchat_data_marker FROM openmls_group_data")
+            .is_ok(),
+        "replaying V2 would recreate openmls_group_data and drop the legacy column"
+    );
 }
 
 #[test]

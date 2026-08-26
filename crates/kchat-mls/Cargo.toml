@@ -18,15 +18,15 @@ openmls_rust_crypto = { workspace = true }
 uq-openmls = { path = "../uq-openmls" }
 kchat_storage_provider = { path = "../kchat-storage-provider" }
 
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 thiserror = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [features]
-extensions-draft-08 = [
-    "openmls/extensions-draft-08",
-    "uq-openmls/extensions-draft-08",
-    "kchat_storage_provider/extensions-draft-08",
+extensions-draft = [
+    "openmls/extensions-draft",
+    "uq-openmls/extensions-draft",
+    "kchat_storage_provider/extensions-draft",
 ]

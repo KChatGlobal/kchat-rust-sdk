@@ -17,20 +17,21 @@ openmls_traits = { workspace = true }
 openmls_rust_crypto = { workspace = true }
 kchat_storage_provider = { path = "../kchat-storage-provider" }
 
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 secrecy = { workspace = true }
 
 [features]
-extensions-draft-08 = [
-    "openmls/extensions-draft-08",
-    "kchat_storage_provider/extensions-draft-08",
-    "openmls_sqlite_storage/extensions-draft-08",
+extensions-draft = [
+    "openmls/extensions-draft",
+    "kchat_storage_provider/extensions-draft",
+    "openmls_sqlite_storage/extensions-draft",
 ]
+post-quantum-tests = []
 
 [dev-dependencies]
 openmls = { workspace = true, features = ["fork-resolution", "libcrux-provider", "test-utils"] }
 criterion = { workspace = true }
-openmls_sqlite_storage = { git = "https://github.com:443/KChatGlobal/openmls.git", branch = "main" }
+openmls_sqlite_storage = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.0" }

@@ -196,7 +196,7 @@ pub fn init_group_with_members(
             &MlsGroupJoinConfig::builder()
                 .wire_format_policy(config.wire_format_policy())
                 .use_ratchet_tree_extension(config.use_ratchet_tree_extension())
-                .max_past_epochs(config.max_past_epochs())
+                .max_past_epochs(config.max_past_epochs().unwrap_or(usize::MAX))
                 .build(),
         )
         .unwrap();

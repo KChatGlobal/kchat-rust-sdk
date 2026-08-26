@@ -23,7 +23,7 @@ openmls_basic_credential = { workspace = true }
 openmls_traits = { workspace = true }
 openmls_rust_crypto = { workspace = true }
 
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 uq-openmls = { path = "../uq-openmls" }
 kchat-mls = {path = "../kchat-mls" }
 thiserror = { workspace = true }

@@ -163,7 +163,7 @@ pub fn add_members<Provider: OpenMlsProvider>(
                 key_packages.push(key_package);
             }
             Err(err) => {
-                if err == KeyPackageVerifyError::InvalidLifetime {
+                if matches!(&err, KeyPackageVerifyError::LifetimeError(_)) {
                     continue;
                 }
                 return Err(err.into());
@@ -739,10 +739,10 @@ impl From<&MlsProposal> for Proposal {
             OpenMlsProposal::ReInit(_) => Self::ReInit,
             OpenMlsProposal::ExternalInit(_) => Self::ExternalInit,
             OpenMlsProposal::GroupContextExtensions(_) => Self::GroupContextExtensions,
-            #[cfg(feature = "extensions-draft-08")]
+            #[cfg(feature = "extensions-draft")]
             OpenMlsProposal::AppDataUpdate(_) => Self::Custom,
             OpenMlsProposal::SelfRemove => Self::SelfRemove,
-            #[cfg(feature = "extensions-draft-08")]
+            #[cfg(feature = "extensions-draft")]
             OpenMlsProposal::AppEphemeral(_) => Self::Custom,
             OpenMlsProposal::Custom(_) => Self::Custom,
         }

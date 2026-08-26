@@ -29,6 +29,10 @@ use crate::{
 
 refinery::embed_migrations!("migrations");
 
+const LEGACY_MIGRATION_TABLE_NAME: &str = "openmls_sqlite_storage_migrations";
+const KCHAT_MIGRATION_TABLE_NAME: &str = "kchat_openmls_sqlite_storage_migrations";
+const LEGACY_KCHAT_MIGRATION_VERSION: i64 = 5;
+
 /// Storage provider for OpenMLS using Sqlite through the `rusqlite` crate.
 /// Implements the [`StorageProvider`] trait. The codec used by the storage
 /// provider is set by the generic parameter `C`.
@@ -158,12 +162,13 @@ impl<C: Codec> SqliteStorageProvider<C> {
     /// Initialize the database with the necessary tables.
     pub fn run_migrations(&mut self) -> Result<(), refinery::Error> {
         let mut runner = migrations::runner().set_abort_divergent(false);
-        runner.set_migration_table_name("openmls_sqlite_storage_migrations");
+        runner.set_migration_table_name(KCHAT_MIGRATION_TABLE_NAME);
 
         let mut connection = self.connection.checkout().migration_err(
             "failed to acquire pooled sqlite connection for migrations",
             None,
         )?;
+        bootstrap_legacy_kchat_migration_history(&mut connection, runner.get_migrations())?;
         runner.run(&mut *connection)?;
         Ok(())
     }
@@ -194,6 +199,106 @@ impl<C: Codec> SqliteStorageProvider<C> {
     {
         self.connection.transaction(f)
     }
+}
+
+fn bootstrap_legacy_kchat_migration_history(
+    connection: &mut Connection,
+    migrations: &[refinery::Migration],
+) -> Result<(), refinery::Error> {
+    let transaction = connection
+        .transaction()
+        .migration_err("failed to start KChat migration history bootstrap", None)?;
+
+    let kchat_history_exists = transaction
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = ?1
+            )",
+            [KCHAT_MIGRATION_TABLE_NAME],
+            |row| row.get::<_, i64>(0),
+        )
+        .migration_err("failed to query KChat migration history table", None)?
+        != 0;
+    if kchat_history_exists {
+        transaction
+            .commit()
+            .migration_err("failed to finish KChat migration history bootstrap", None)?;
+        return Ok(());
+    }
+
+    let legacy_history_exists = transaction
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = ?1
+            )",
+            [LEGACY_MIGRATION_TABLE_NAME],
+            |row| row.get::<_, i64>(0),
+        )
+        .migration_err("failed to query legacy migration history table", None)?
+        != 0;
+    if !legacy_history_exists {
+        transaction
+            .commit()
+            .migration_err("failed to finish KChat migration history bootstrap", None)?;
+        return Ok(());
+    }
+
+    let legacy_migrations = {
+        let mut statement = transaction
+            .prepare(&format!(
+                "SELECT version, name, checksum
+                 FROM {LEGACY_MIGRATION_TABLE_NAME}
+                 ORDER BY version"
+            ))
+            .migration_err("failed to read legacy migration history", None)?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .migration_err("failed to query legacy migration history", None)?
+            .collect::<Result<Vec<_>, _>>()
+            .migration_err("failed to collect legacy migration history", None)?
+    };
+    let expected_migrations = migrations
+        .iter()
+        .filter(|migration| i64::from(migration.version()) <= LEGACY_KCHAT_MIGRATION_VERSION)
+        .map(|migration| {
+            (
+                i64::from(migration.version()),
+                migration.name().to_owned(),
+                migration.checksum().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut expected_migrations = expected_migrations;
+    expected_migrations.sort_by_key(|(version, _, _)| *version);
+
+    if legacy_migrations == expected_migrations {
+        transaction
+            .execute_batch(&format!(
+                "CREATE TABLE {KCHAT_MIGRATION_TABLE_NAME}(
+                    version INTEGER PRIMARY KEY,
+                    name VARCHAR(255),
+                    applied_on VARCHAR(255),
+                    checksum VARCHAR(255)
+                 );
+                 INSERT INTO {KCHAT_MIGRATION_TABLE_NAME}
+                 SELECT version, name, applied_on, checksum
+                 FROM {LEGACY_MIGRATION_TABLE_NAME};"
+            ))
+            .migration_err("failed to create KChat migration history table", None)?;
+    }
+
+    transaction
+        .commit()
+        .migration_err("failed to finish KChat migration history bootstrap", None)?;
+    Ok(())
 }
 
 impl<'tx, C: Codec> TransactionalStorageProvider<'tx, C> {
@@ -868,7 +973,7 @@ impl<C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION> for SqliteStorageProvid
         StorablePskIdRef(psk_id).delete::<C>(&self.connection)
     }
 
-    #[cfg(feature = "extensions-draft-08")]
+    #[cfg(feature = "extensions-draft")]
     fn write_application_export_tree<
         GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
         ApplicationExportTree: traits::ApplicationExportTree<STORAGE_PROVIDER_VERSION>,
@@ -884,7 +989,7 @@ impl<C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION> for SqliteStorageProvid
         )
     }
 
-    #[cfg(feature = "extensions-draft-08")]
+    #[cfg(feature = "extensions-draft")]
     fn application_export_tree<
         GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
         ApplicationExportTree: traits::ApplicationExportTree<STORAGE_PROVIDER_VERSION>,
@@ -899,7 +1004,7 @@ impl<C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION> for SqliteStorageProvid
         )
     }
 
-    #[cfg(feature = "extensions-draft-08")]
+    #[cfg(feature = "extensions-draft")]
     fn delete_application_export_tree<
         GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
         ApplicationExportTree: traits::ApplicationExportTree<STORAGE_PROVIDER_VERSION>,
@@ -1548,7 +1653,7 @@ impl<'tx, C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION>
         StorablePskIdRef(psk_id).delete_in_tx::<C>(self.tx)
     }
 
-    #[cfg(feature = "extensions-draft-08")]
+    #[cfg(feature = "extensions-draft")]
     fn write_application_export_tree<
         GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
         ApplicationExportTree: traits::ApplicationExportTree<STORAGE_PROVIDER_VERSION>,
@@ -1564,7 +1669,7 @@ impl<'tx, C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION>
         )
     }
 
-    #[cfg(feature = "extensions-draft-08")]
+    #[cfg(feature = "extensions-draft")]
     fn application_export_tree<
         GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
         ApplicationExportTree: traits::ApplicationExportTree<STORAGE_PROVIDER_VERSION>,
@@ -1579,7 +1684,7 @@ impl<'tx, C: Codec> StorageProvider<STORAGE_PROVIDER_VERSION>
         )
     }
 
-    #[cfg(feature = "extensions-draft-08")]
+    #[cfg(feature = "extensions-draft")]
     fn delete_application_export_tree<
         GroupId: traits::GroupId<STORAGE_PROVIDER_VERSION>,
         ApplicationExportTree: traits::ApplicationExportTree<STORAGE_PROVIDER_VERSION>,

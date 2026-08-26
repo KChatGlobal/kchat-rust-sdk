@@ -31,7 +31,7 @@ openmls_traits = { version = "0.6.0" }
 openmls_rust_crypto = { version = "0.6.0" }
 
 [patch.crates-io]
-openmls = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.0" }
-openmls_basic_credential = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.0" }
-openmls_traits = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.0" }
-openmls_rust_crypto = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.0" }
+openmls = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.1" }
+openmls_basic_credential = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.1" }
+openmls_traits = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.1" }
+openmls_rust_crypto = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.1" }

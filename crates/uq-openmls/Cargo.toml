@@ -26,12 +26,12 @@ secrecy = { workspace = true }
 [features]
 extensions-draft = [
     "openmls/extensions-draft",
+    "openmls/extensions-draft-test-dependencies",
     "kchat_storage_provider/extensions-draft",
     "openmls_sqlite_storage/extensions-draft",
 ]
-post-quantum-tests = []
 
 [dev-dependencies]
 openmls = { workspace = true, features = ["fork-resolution", "libcrux-provider", "test-utils"] }
 criterion = { workspace = true }
-openmls_sqlite_storage = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.0" }
+openmls_sqlite_storage = { git = "https://github.com/KChatGlobal/openmls.git", tag = "kchat-v0.9.1" }

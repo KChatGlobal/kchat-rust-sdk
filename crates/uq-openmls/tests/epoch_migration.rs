@@ -376,9 +376,12 @@ fn legacy_kchat_migration_history_is_bootstrapped_without_replaying_schema() {
         connection
             .execute_batch(
                 "ALTER TABLE openmls_group_data
-                 ADD COLUMN legacy_kchat_data_marker INTEGER NOT NULL DEFAULT 0;",
+                 ADD COLUMN legacy_kchat_data_marker INTEGER NOT NULL DEFAULT 0;
+                 DROP INDEX openmls_decrypted_application_messages_expires_at_idx;
+                 DROP TABLE openmls_decrypted_application_messages;
+                 DELETE FROM kchat_openmls_sqlite_storage_migrations WHERE version = 6;",
             )
-            .expect("should add legacy data marker");
+            .expect("should prepare legacy KChat schema");
     }
 
     let connection = Connection::open(&db_path).expect("should open legacy KChat database");
@@ -407,17 +410,20 @@ fn legacy_kchat_migration_history_is_bootstrapped_without_replaying_schema() {
         "openmls_sqlite_storage_migrations"
     ));
     assert_eq!(
-        count_rows(&connection, "kchat_openmls_sqlite_storage_migrations"),
-        5
-    );
-    assert_eq!(
         count_rows(&connection, "openmls_sqlite_storage_migrations"),
         5
     );
+    let kchat_history =
+        migration_history_rows(&connection, "kchat_openmls_sqlite_storage_migrations");
+    let legacy_history = migration_history_rows(&connection, "openmls_sqlite_storage_migrations");
     assert_eq!(
-        migration_history_rows(&connection, "kchat_openmls_sqlite_storage_migrations"),
-        migration_history_rows(&connection, "openmls_sqlite_storage_migrations"),
-        "bootstrap must preserve the KChat migration history exactly"
+        &kchat_history[..legacy_history.len()],
+        legacy_history.as_slice(),
+        "bootstrap must preserve the legacy KChat migration history before applying new migrations"
+    );
+    assert!(
+        table_exists(&connection, "openmls_decrypted_application_messages"),
+        "migrations added after the legacy history must still be applied"
     );
     assert!(
         connection

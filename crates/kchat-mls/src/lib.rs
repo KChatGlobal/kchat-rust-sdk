@@ -327,12 +327,27 @@ pub fn process_all_messages(
             .iter()
             .filter(|message| message.message_type != MessageType::Welcome)
             .map(|message| message.epoch.into());
+        let mut error = None;
         let mut mls_group: Option<MlsGroup> =
-            group_with_epoch_message_secrets(provider, group_id, preload_epochs).ok();
+            match group_with_epoch_message_secrets(provider, group_id, preload_epochs) {
+                Ok(group) => Some(group),
+                Err(Error::GroupIsNotExisted) => None,
+                Err(err) => {
+                    let err_log = format!("load group data error, group {}: {}", group_id, err);
+                    emit_log(log, || err_log.clone());
+                    error = Some(GroupError {
+                        error_code: convert_to_error_code(&err),
+                        error_message: err_log,
+                    });
+                    None
+                }
+            };
 
         let mut group_deleted = false;
         // Check desync to merge or clear pending commit
-        if let Some(existing_group) = &mls_group {
+        if error.is_none()
+            && let Some(existing_group) = &mls_group
+        {
             let Some(own_member_id) = own_id_from_leaf_node(existing_group) else {
                 continue;
             };
@@ -487,6 +502,7 @@ pub fn process_all_messages(
             }
 
             if msg.message_type == MessageType::Proposal
+                && error.is_none()
                 && let Some(group) = &mut mls_group
             {
                 if let Ok(proposal) = process_proposal_message(group, provider, &msg.blob) {
@@ -549,9 +565,12 @@ pub fn process_all_messages(
         }
 
         // Process all messages
-        let mut error = None;
         let mut commit_group_loaded = false;
         'process_operation: for msg in &messages_of_group.messages {
+            if error.is_some() {
+                break;
+            }
+
             match msg.message_type {
                 MessageType::Welcome => {
                     emit_log(log, || format!("process welcome, group {}", group_id));

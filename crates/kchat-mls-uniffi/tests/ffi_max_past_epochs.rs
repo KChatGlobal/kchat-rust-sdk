@@ -9,6 +9,7 @@ use mls_mobile_sdk_rs::mls::{GroupConfigUpdate, UqMls};
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 const MAX_PAST_EPOCHS: u16 = 101;
+const DECRYPTED_MESSAGE_TTL_HOURS: u64 = 48;
 const OUT_OF_ORDER_TOLERANCE: u32 = 5;
 const MAXIMUM_FORWARD_DISTANCE: u32 = 10;
 
@@ -36,6 +37,7 @@ fn make_client(test_name: &str, client_id: &str) -> UqMls {
         db_path(&format!("{unique}-mls")),
         db_path(&format!("{unique}-group-status")),
         MAX_PAST_EPOCHS,
+        DECRYPTED_MESSAGE_TTL_HOURS,
         None,
         OUT_OF_ORDER_TOLERANCE,
         MAXIMUM_FORWARD_DISTANCE,
@@ -55,6 +57,7 @@ fn make_client_with_max_past_epochs(
         db_path(&format!("{unique}-mls")),
         db_path(&format!("{unique}-group-status")),
         max_past_epochs,
+        DECRYPTED_MESSAGE_TTL_HOURS,
         None,
         OUT_OF_ORDER_TOLERANCE,
         MAXIMUM_FORWARD_DISTANCE,

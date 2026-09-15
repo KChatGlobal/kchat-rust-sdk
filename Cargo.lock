@@ -1478,6 +1478,7 @@ version = "0.2.0"
 dependencies = [
  "criterion",
  "kchat-mls",
+ "kchat_storage_provider",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
@@ -1485,6 +1486,7 @@ dependencies = [
  "rand 0.9.5",
  "rusqlite",
  "secrecy",
+ "sha2 0.10.9",
  "thiserror",
  "tokio",
  "uniffi",

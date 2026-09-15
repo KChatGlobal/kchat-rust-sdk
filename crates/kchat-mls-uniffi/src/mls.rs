@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use kchat_mls::{
     CreateCustomProposalArgs, GroupPendingOperation, GroupStatusConnection,
@@ -6,15 +9,18 @@ use kchat_mls::{
     extract_jid_from_member_id, get_group_pending_operation, get_group_pending_operations_batch,
     insert_or_update_group_status, open_group_status_connection, process_all_messages,
 };
+use kchat_storage_provider::DecryptedApplicationMessage;
 use openmls::{
     group::{
-        MIXED_CIPHERTEXT_WIRE_FORMAT_POLICY, MIXED_PLAINTEXT_WIRE_FORMAT_POLICY,
+        GroupId, MIXED_CIPHERTEXT_WIRE_FORMAT_POLICY, MIXED_PLAINTEXT_WIRE_FORMAT_POLICY,
         MlsGroupCreateConfig, MlsGroupJoinConfig, PURE_CIPHERTEXT_WIRE_FORMAT_POLICY,
         PURE_PLAINTEXT_WIRE_FORMAT_POLICY, WireFormatPolicy as OpenMlsWireFormatPolicy,
     },
     prelude::{BasicCredential, Ciphersuite, SenderRatchetConfiguration},
 };
+use openmls_traits::OpenMlsProvider;
 use secrecy::SecretString;
+use sha2::{Digest, Sha256};
 use uq_openmls::{
     core::{self, DEFAULT_CIPHERSUITE},
     provider::SqliteProvider,
@@ -36,8 +42,14 @@ pub struct UqMls {
     max_past_epochs: u16,
     out_of_order_tolerance: u32,
     maximum_forward_distance: u32,
+    decrypted_message_ttl_seconds: i64,
     conn: GroupStatusConnection,
     provider: SqliteProvider,
+}
+
+enum WalDecryptOutcome {
+    Message(core::ProcessApplicationMessageResult),
+    MessageIdConflict,
 }
 
 #[derive(uniffi::Record)]
@@ -48,6 +60,22 @@ pub struct GroupConfigUpdate {
 }
 
 impl UqMls {
+    fn ttl_seconds(decrypted_message_ttl_hours: u64) -> Result<i64, Error> {
+        let seconds = decrypted_message_ttl_hours
+            .checked_mul(60 * 60)
+            .ok_or(Error::InvalidDecryptedMessageTtl)?;
+        i64::try_from(seconds).map_err(|_| Error::InvalidDecryptedMessageTtl)
+    }
+
+    fn unix_seconds() -> Result<i64, Error> {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| Error::Storage(format!("system clock before unix epoch: {error}")))?
+            .as_secs();
+        i64::try_from(seconds)
+            .map_err(|_| Error::Storage("system clock exceeds i64 unix seconds".to_owned()))
+    }
+
     fn ciphersuite(&self) -> Result<Ciphersuite, Error> {
         Ok(Ciphersuite::try_from(self.ciphersuite)?)
     }
@@ -477,17 +505,42 @@ impl UqMls {
         storage_path: String,
         group_storage_path: String,
         max_past_epochs: u16,
+        decrypted_message_ttl_hours: u64,
         password: Option<String>,
         out_of_order_tolerance: u32,
         maximum_forward_distance: u32,
         callback: Option<Arc<dyn ProcessMessagesCallback>>,
     ) -> Result<UqMls, Error> {
+        if decrypted_message_ttl_hours == 0 {
+            return Err(Error::InvalidDecryptedMessageTtl);
+        }
+        let decrypted_message_ttl_seconds = Self::ttl_seconds(decrypted_message_ttl_hours)?;
         let emit = callback.as_ref().map(|cb| {
             let cb = cb.clone();
             move |msg: String| cb.on_trigger(msg)
         });
         let secret = password.map(SecretString::from);
         let conn = open_group_status_connection(&group_storage_path, &secret)?;
+        let provider = SqliteProvider::new_with_log(
+            &storage_path,
+            &secret,
+            emit.as_ref().map(|emit| emit as &dyn Fn(String)),
+        )?;
+        match Self::unix_seconds().and_then(|now| {
+            provider
+                .storage()
+                .prune_decrypted_application_messages(now)
+                .map_err(Error::from)
+        }) {
+            Ok(()) => {}
+            Err(error) => {
+                if let Some(emit) = &emit {
+                    emit(format!(
+                        "decrypted application message cache cleanup error: {error}"
+                    ));
+                }
+            }
+        }
 
         Ok(UqMls {
             client_id,
@@ -497,12 +550,9 @@ impl UqMls {
             max_past_epochs,
             out_of_order_tolerance,
             maximum_forward_distance,
+            decrypted_message_ttl_seconds,
             conn,
-            provider: SqliteProvider::new_with_log(
-                &storage_path,
-                &secret,
-                emit.as_ref().map(|emit| emit as &dyn Fn(String)),
-            )?,
+            provider,
         })
     }
 
@@ -738,6 +788,112 @@ impl UqMls {
             .map_err(|e| Error::Sqlite(e.to_string()))?;
 
         Ok(result.into())
+    }
+
+    pub fn process_application_message_with_wal(
+        &self,
+        group_id: &str,
+        message_id: &str,
+        message: &[u8],
+        callback: Option<Arc<dyn ProcessMessagesCallback>>,
+    ) -> Result<ProcessApplicationMessageResult, Error> {
+        let emit_log = |log: String| {
+            if let Some(callback) = callback.as_ref() {
+                callback.on_trigger(log);
+            }
+        };
+        emit_log(format!(
+            "start process application message with wal, group {}, message_id {}",
+            group_id, message_id
+        ));
+        let now = Self::unix_seconds()?;
+        let expires_at = now
+            .checked_add(self.decrypted_message_ttl_seconds)
+            .ok_or(Error::InvalidDecryptedMessageTtl)?;
+        let ciphertext_digest = Sha256::digest(message).to_vec();
+        let cache_group_id = GroupId::from_slice(group_id.as_bytes());
+
+        let outcome = self
+            .provider
+            .transaction(|tx_provider| {
+                if let Some(entry) = tx_provider.storage().load_decrypted_application_message(
+                    &cache_group_id,
+                    message_id,
+                    now,
+                )? {
+                    if entry.ciphertext_digest != ciphertext_digest {
+                        return Ok(WalDecryptOutcome::MessageIdConflict);
+                    }
+                    emit_log(format!(
+                        "process application message with wal - cache hit, group {}, message_id {}",
+                        group_id, message_id
+                    ));
+                    return Ok(WalDecryptOutcome::Message(
+                        core::ProcessApplicationMessageResult {
+                            message: entry.plaintext,
+                        },
+                    ));
+                }
+
+                emit_log(format!(
+                    "process application message with wal - cache miss, group {}, message_id {}",
+                    group_id, message_id
+                ));
+                let mut mls_group = core::group(tx_provider, group_id, [message])?;
+                let result =
+                    core::process_application_message(&mut mls_group, tx_provider, message)?;
+                emit_log(format!(
+                    "process application message with wal - decrypt success, group {}, message_id {}",
+                    group_id, message_id
+                ));
+                tx_provider.storage().insert_decrypted_application_message(
+                    &cache_group_id,
+                    message_id,
+                    &DecryptedApplicationMessage {
+                        ciphertext_digest,
+                        plaintext: result.message.clone(),
+                        created_at: now,
+                        expires_at,
+                    },
+                )?;
+                emit_log(format!(
+                    "process application message with wal - cache store success, group {}, message_id {}",
+                    group_id, message_id
+                ));
+                Ok(WalDecryptOutcome::Message(result))
+            })
+            .map_err(|error| {
+                emit_log(format!(
+                    "process application message with wal error, group {}, message_id {}: {}",
+                    group_id, message_id, error
+                ));
+                Error::Sqlite(error.to_string())
+            })?;
+
+        match outcome {
+            WalDecryptOutcome::Message(result) => {
+                emit_log(format!(
+                    "end process application message with wal, group {}, message_id {}",
+                    group_id, message_id
+                ));
+                Ok(result.into())
+            }
+            WalDecryptOutcome::MessageIdConflict => {
+                emit_log(format!(
+                    "process application message with wal error, group {}, message_id {}: message id conflict",
+                    group_id, message_id
+                ));
+                Err(Error::MessageIdConflict)
+            }
+        }
+    }
+
+    pub fn prune_decrypted_application_messages(&self) -> Result<(), Error> {
+        let now = Self::unix_seconds()?;
+        self.provider
+            .storage()
+            .prune_decrypted_application_messages(now)
+            .map_err(|error| Error::Sqlite(error.to_string()))
     }
 
     pub fn process_many_operation_messages(
@@ -1135,7 +1291,13 @@ impl UqMls {
         self.provider
             .transaction(|tx_provider| {
                 let mut mls_group = core::group(tx_provider, group_id, [])?;
-                core::delete_group(&mut mls_group, tx_provider)
+                core::delete_group(&mut mls_group, tx_provider)?;
+                tx_provider
+                    .storage()
+                    .delete_decrypted_application_messages(&GroupId::from_slice(
+                        group_id.as_bytes(),
+                    ))?;
+                Ok(())
             })
             .map_err(|e| Error::Sqlite(e.to_string()))?;
         let _ = delete_group_status(&self.conn, group_id);

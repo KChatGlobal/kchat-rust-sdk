@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -12,16 +13,33 @@ use uq_openmls::{
     provider::SqliteProvider,
 };
 
+static TEMP_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn temp_db_path() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_nanos();
+    temp_db_path_at_nanos(nanos)
+}
+
+fn temp_db_path_at_nanos(nanos: u128) -> PathBuf {
+    let counter = TEMP_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "uq-openmls-sqlite-transaction-{}-{}.sqlite",
+        "uq-openmls-sqlite-transaction-{}-{counter}-{nanos}.sqlite",
         std::process::id(),
-        nanos
     ))
+}
+
+#[test]
+fn temp_db_paths_are_unique_when_clock_values_match() {
+    let first = temp_db_path_at_nanos(42);
+    let second = temp_db_path_at_nanos(42);
+
+    assert_ne!(
+        first, second,
+        "concurrent tests with the same clock reading must not share a SQLite database"
+    );
 }
 
 fn group_config() -> MlsGroupCreateConfig {

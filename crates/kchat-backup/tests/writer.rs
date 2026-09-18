@@ -14,6 +14,10 @@ struct Source {
 
 struct CancelledSource;
 
+struct CancelsAfterFirstRead {
+    read_once: bool,
+}
+
 impl BackupByteSource for CancelledSource {
     fn read_chunk(&mut self, _: &mut [u8]) -> Result<usize, kchat_backup::BackupError> {
         Ok(0)
@@ -21,6 +25,21 @@ impl BackupByteSource for CancelledSource {
 
     fn is_cancelled(&self) -> bool {
         true
+    }
+}
+
+impl BackupByteSource for CancelsAfterFirstRead {
+    fn read_chunk(&mut self, destination: &mut [u8]) -> Result<usize, kchat_backup::BackupError> {
+        if self.read_once {
+            return Ok(0);
+        }
+        destination[..4].copy_from_slice(b"data");
+        self.read_once = true;
+        Ok(4)
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.read_once
     }
 }
 
@@ -110,6 +129,17 @@ fn returns_cancelled_without_finalizing_when_the_source_cancels() {
 }
 
 #[test]
+fn cancellation_after_a_source_read_does_not_write_a_final_block() {
+    let mut source = CancelsAfterFirstRead { read_once: false };
+    let mut sink = Sink::default();
+
+    let error = seal_object_v1(&context(), &mut source, &mut sink).unwrap_err();
+
+    assert_eq!(error.code(), BackupErrorCode::Cancelled);
+    assert_eq!(sink.0.len(), 29);
+}
+
+#[test]
 fn frames_full_compressed_blocks_before_one_authenticated_final_block() {
     let mut state = 0x0123_4567_89ab_cdef_u64;
     let bytes = (0..(2 * 65_536))
@@ -143,12 +173,58 @@ fn frames_full_compressed_blocks_before_one_authenticated_final_block() {
 }
 
 #[test]
+fn independent_encryptions_use_fresh_nonce_prefixes() {
+    let plaintext = b"same opaque client-owned bytes".to_vec();
+    let mut first_source = Source {
+        bytes: plaintext.clone(),
+        offset: 0,
+    };
+    let mut second_source = Source {
+        bytes: plaintext,
+        offset: 0,
+    };
+    let mut first_sink = Sink::default();
+    let mut second_sink = Sink::default();
+    let context = context();
+
+    seal_object_v1(&context, &mut first_source, &mut first_sink).unwrap();
+    seal_object_v1(&context, &mut second_source, &mut second_sink).unwrap();
+
+    assert_ne!(&first_sink.0[10..29], &second_sink.0[10..29]);
+    assert_ne!(first_sink.0, second_sink.0);
+}
+
+#[test]
 fn rejects_writes_and_finish_after_abort() {
     let mut sink = Sink::default();
     let context = context();
     let mut writer = BackupObjectWriterV1::new(&context, &mut sink).unwrap();
 
     writer.abort().unwrap();
+
+    assert_eq!(
+        writer
+            .write_plaintext(b"must not encrypt")
+            .unwrap_err()
+            .code(),
+        BackupErrorCode::InvalidState
+    );
+    assert_eq!(
+        writer.finish().unwrap_err().code(),
+        BackupErrorCode::InvalidState
+    );
+}
+
+#[test]
+fn rejects_writes_and_a_second_finish_after_successful_finish() {
+    let mut sink = Sink::default();
+    let context = context();
+    let mut writer = BackupObjectWriterV1::new(&context, &mut sink).unwrap();
+
+    writer
+        .write_plaintext(b"opaque client-owned bytes")
+        .unwrap();
+    writer.finish().unwrap();
 
     assert_eq!(
         writer

@@ -15,9 +15,6 @@
 //!   4..6    outer format_version: u16 = 1
 //!   6..30   nonce: [u8; 24]
 //!   30..90  ciphertext_and_tag: [u8; 60]
-//!
-//! `ciphertext_and_tag` is one-shot XChaCha20Poly1305 encryption of the
-//! 44-byte plaintext and therefore includes its 16-byte authentication tag.
 
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,

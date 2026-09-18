@@ -1,3 +1,15 @@
+//! V1 encrypted-object wire format. All integer fields are big-endian.
+//!
+//! ObjectEnvelopeV1 (fixed header: 29 bytes)
+//!   0..4    magic: "KCBK"
+//!   4..6    format_version: u16 = 1
+//!   6..8    crypto_suite_id: u16 = 1  (XChaCha20Poly1305 STREAM-BE32)
+//!   8..10   compression_id: u16 = 1   (Zstd level 3, no dictionary)
+//!   10..29  stream_nonce_prefix: [u8; 19]
+//!   EncryptedStreamBlockV1 (repeated until EOF; at least one block)
+//!     ciphertext_len: u32
+//!     ciphertext: [u8; ciphertext_len]
+
 pub(crate) const ENVELOPE_MAGIC: &[u8; 4] = b"KCBK";
 pub(crate) const ENVELOPE_VERSION: u16 = 1;
 pub(crate) const CRYPTO_SUITE_ID: u16 = 1;

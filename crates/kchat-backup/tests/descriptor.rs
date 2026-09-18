@@ -93,17 +93,41 @@ fn rejects_wrong_length_tampering_and_a_different_authenticated_account() {
     let other_account = BackupAccountId::parse("ffeeddcc-bbaa-9988-7766-554433221100").unwrap();
     let serialized = seal_descriptor_v1(&master_key, &account).unwrap();
 
-    assert_eq!(
-        open_descriptor_v1(&master_key, &account, &serialized[..89])
-            .unwrap_err()
-            .code(),
-        BackupErrorCode::InvalidArgument
-    );
+    for length in 0..=128 {
+        if length == 90 {
+            continue;
+        }
+        let mut malformed = serialized.clone();
+        malformed.resize(length, 0);
+        assert_eq!(
+            open_descriptor_v1(&master_key, &account, &malformed)
+                .unwrap_err()
+                .code(),
+            BackupErrorCode::InvalidArgument
+        );
+    }
 
     let mut tampered = serialized.clone();
     tampered[20] ^= 1;
-    assert!(open_descriptor_v1(&master_key, &account, &tampered).is_err());
-    assert!(open_descriptor_v1(&master_key, &other_account, &serialized).is_err());
+    assert_eq!(
+        open_descriptor_v1(&master_key, &account, &tampered)
+            .unwrap_err()
+            .code(),
+        BackupErrorCode::AuthenticationFailed
+    );
+    assert_eq!(
+        open_descriptor_v1(&master_key, &other_account, &serialized)
+            .unwrap_err()
+            .code(),
+        BackupErrorCode::AuthenticationFailed
+    );
+    let (_, other_master_key) = BackupMasterKey::generate().unwrap();
+    assert_eq!(
+        open_descriptor_v1(&other_master_key, &account, &serialized)
+            .unwrap_err()
+            .code(),
+        BackupErrorCode::AuthenticationFailed
+    );
 }
 
 #[test]
@@ -111,11 +135,11 @@ fn opens_the_fixed_v1_descriptor() {
     let master_key = BackupMasterKey::from_mnemonic(MNEMONIC).unwrap();
     let account = BackupAccountId::parse("00112233-4455-6677-8899-aabbccddeeff").unwrap();
     let serialized = decode_hex(DESCRIPTOR_HEX);
+    let namespace = BackupNamespaceId::derive(&master_key, &account).unwrap();
 
-    assert_eq!(serialized.len(), 90);
     assert_eq!(
         open_descriptor_v1(&master_key, &account, &serialized).unwrap(),
-        BackupNamespaceId::derive(&master_key, &account).unwrap()
+        namespace
     );
 }
 

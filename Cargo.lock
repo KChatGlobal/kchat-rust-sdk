@@ -221,6 +221,18 @@ dependencies = [
 
 [[package]]
 name = "bip39"
+version = "2.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
+dependencies = [
+ "bitcoin_hashes",
+ "serde",
+ "unicode-normalization",
+ "zeroize",
+]
+
+[[package]]
+name = "bip39"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4559bb9225f8401dcea601cf8dc9ed81ea0dadd9cf7755fdefdd93ef7961e19e"
@@ -1608,10 +1620,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "kchat-backup"
+version = "0.2.0"
+dependencies = [
+ "bip39 2.2.2",
+ "getrandom 0.3.4",
+ "hkdf 0.12.4",
+ "sha2 0.10.9",
+ "thiserror",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "kchat-mls"
 version = "0.2.0"
 dependencies = [
- "bip39",
+ "bip39 3.0.0",
  "ed25519-dalek 3.0.0",
  "getrandom 0.4.3",
  "hkdf 0.13.0",

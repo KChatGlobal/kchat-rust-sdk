@@ -11,6 +11,9 @@ pub enum BackupErrorCode {
     ContextMismatch,
     IoError,
     InvalidState,
+    AuthenticationFailed,
+    ResourceLimitExceeded,
+    Cancelled,
 }
 
 #[derive(Debug, Error)]
@@ -20,6 +23,10 @@ pub struct BackupError {
 }
 
 impl BackupError {
+    pub(crate) const fn from_code(code: BackupErrorCode) -> Self {
+        Self { code }
+    }
+
     pub(crate) const fn invalid_argument() -> Self {
         Self {
             code: BackupErrorCode::InvalidArgument,
@@ -71,6 +78,24 @@ impl BackupError {
     pub(crate) const fn invalid_state() -> Self {
         Self {
             code: BackupErrorCode::InvalidState,
+        }
+    }
+
+    pub(crate) const fn authentication_failed() -> Self {
+        Self {
+            code: BackupErrorCode::AuthenticationFailed,
+        }
+    }
+
+    pub(crate) const fn resource_limit_exceeded() -> Self {
+        Self {
+            code: BackupErrorCode::ResourceLimitExceeded,
+        }
+    }
+
+    pub(crate) const fn cancelled() -> Self {
+        Self {
+            code: BackupErrorCode::Cancelled,
         }
     }
 

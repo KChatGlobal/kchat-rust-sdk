@@ -13,12 +13,15 @@ pub use password::PasswordBackupKey;
 pub(crate) const ACCOUNT_KEY_LABEL: &[u8] = b"KCHAT_BACKUP_V1_ACCOUNT";
 pub(crate) const NAMESPACE_KEY_LABEL: &[u8] = b"KCHAT_BACKUP_V1_NAMESPACE";
 pub(crate) const OBJECT_KEY_LABEL: &[u8] = b"KCHAT_BACKUP_V1_OBJECT";
+pub(crate) const DESCRIPTOR_KEY_LABEL: &[u8] = b"KCHAT_BACKUP_V1_DESCRIPTOR";
 
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub(crate) struct AccountBackupKey([u8; 32]);
 
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub(crate) struct ObjectBackupKey([u8; 32]);
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub(crate) struct DescriptorBackupKey([u8; 32]);
 
 pub trait BackupKeyMaterial: private::Sealed {}
 
@@ -43,6 +46,9 @@ pub(crate) fn derive_account_key(
 }
 
 impl AccountBackupKey {
+    pub(crate) fn derive_descriptor(&self) -> Result<DescriptorBackupKey, BackupError> {
+        Ok(DescriptorBackupKey(derive_hkdf(&self.0, DESCRIPTOR_KEY_LABEL)?))
+    }
     pub(crate) fn derive_namespace(&self) -> Result<[u8; 32], BackupError> {
         derive_hkdf(&self.0, NAMESPACE_KEY_LABEL)
     }
@@ -59,6 +65,7 @@ impl AccountBackupKey {
         Ok(object_key)
     }
 }
+impl DescriptorBackupKey { pub(crate) fn as_bytes(&self) -> &[u8; 32] { &self.0 } }
 
 impl ObjectBackupKey {
     pub(crate) fn as_bytes(&self) -> &[u8; 32] {

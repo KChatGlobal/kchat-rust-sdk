@@ -1,6 +1,9 @@
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{BackupAccountId, BackupError, BackupMasterKey, key::ObjectBackupKey};
+use crate::{
+    BackupAccountId, BackupError,
+    key::{BackupKeyMaterial, ObjectBackupKey, derive_account_key},
+};
 
 pub const BACKUP_FORMAT_VERSION_V1: u16 = 1;
 const OBJECT_CONTEXT_LABEL: &[u8] = b"KCHAT_BACKUP_OBJECT_CONTEXT_V1";
@@ -11,10 +14,10 @@ pub struct BackupNamespaceId([u8; 32]);
 
 impl BackupNamespaceId {
     pub fn derive(
-        master_key: &BackupMasterKey,
+        master_key: &impl BackupKeyMaterial,
         account_id: &BackupAccountId,
     ) -> Result<Self, BackupError> {
-        let account_key = master_key.derive_account_key(account_id.as_bytes())?;
+        let account_key = derive_account_key(master_key, account_id.as_bytes())?;
         Ok(Self(account_key.derive_namespace()?))
     }
 
@@ -63,7 +66,7 @@ pub struct BackupObjectContextV1 {
 
 impl BackupObjectContextV1 {
     pub fn new(
-        master_key: &BackupMasterKey,
+        master_key: &impl BackupKeyMaterial,
         account_id: BackupAccountId,
         namespace_id: BackupNamespaceId,
         format_version: u16,
@@ -86,7 +89,7 @@ impl BackupObjectContextV1 {
             .copy_from_slice(namespace_id.as_bytes());
         canonical_bytes[namespace_start + 32..].copy_from_slice(chunk_id.as_bytes());
 
-        let account_key = master_key.derive_account_key(account_id.as_bytes())?;
+        let account_key = derive_account_key(master_key, account_id.as_bytes())?;
         let object_key = account_key.derive_object(&canonical_bytes)?;
 
         Ok(Self {

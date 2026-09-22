@@ -3,6 +3,7 @@ use thiserror::Error;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackupErrorCode {
     InvalidArgument,
+    EmptyPassword,
     InvalidMnemonic,
     InvalidMasterKey,
     UnsupportedFormat,
@@ -21,6 +22,12 @@ impl BackupError {
     pub(crate) const fn invalid_argument() -> Self {
         Self {
             code: BackupErrorCode::InvalidArgument,
+        }
+    }
+
+    pub(crate) const fn empty_password() -> Self {
+        Self {
+            code: BackupErrorCode::EmptyPassword,
         }
     }
 

@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+argon2 = { version = "0.6", default-features = false, features = ["zeroize"] }
 bip39 = { version = "2.2.2", features = ["zeroize"] }
 getrandom = { workspace = true }
 hkdf = { workspace = true }

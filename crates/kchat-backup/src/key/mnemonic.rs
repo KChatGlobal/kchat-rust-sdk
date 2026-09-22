@@ -5,21 +5,14 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::BackupError;
 
+use super::{ACCOUNT_KEY_LABEL, BackupKeyMaterial, derive_hkdf, private};
+
 const MASTER_KEY_INFO: &[u8] = b"KCHAT_BACKUP_V1_MASTER";
-pub(crate) const ACCOUNT_KEY_LABEL: &[u8] = b"KCHAT_BACKUP_V1_ACCOUNT";
-pub(crate) const NAMESPACE_KEY_LABEL: &[u8] = b"KCHAT_BACKUP_V1_NAMESPACE";
-pub(crate) const OBJECT_KEY_LABEL: &[u8] = b"KCHAT_BACKUP_V1_OBJECT";
 
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct BackupMasterKey([u8; 32]);
+pub struct MnemonicBackupKey([u8; 32]);
 
-#[derive(Zeroize, ZeroizeOnDrop)]
-pub(crate) struct AccountBackupKey([u8; 32]);
-
-#[derive(Zeroize, ZeroizeOnDrop)]
-pub(crate) struct ObjectBackupKey([u8; 32]);
-
-impl BackupMasterKey {
+impl MnemonicBackupKey {
     pub fn generate() -> Result<(String, Self), BackupError> {
         let mut entropy = [0_u8; 32];
         getrandom::fill(&mut entropy).map_err(|_| BackupError::io_error())?;
@@ -61,54 +54,24 @@ impl BackupMasterKey {
         Ok(Self(key))
     }
 
-    pub(crate) fn derive_account_key(
-        &self,
-        account_id: &[u8; 16],
-    ) -> Result<AccountBackupKey, BackupError> {
+    fn derive_account_key_material(&self, account_id: &[u8; 16]) -> Result<[u8; 32], BackupError> {
         let mut info = [0_u8; ACCOUNT_KEY_LABEL.len() + 16];
         info[..ACCOUNT_KEY_LABEL.len()].copy_from_slice(ACCOUNT_KEY_LABEL);
         info[ACCOUNT_KEY_LABEL.len()..].copy_from_slice(account_id);
-        Ok(AccountBackupKey(derive_hkdf(&self.0, &info)?))
+        derive_hkdf(&self.0, &info)
     }
 }
 
-impl AccountBackupKey {
-    pub(crate) fn derive_namespace(&self) -> Result<[u8; 32], BackupError> {
-        derive_hkdf(&self.0, NAMESPACE_KEY_LABEL)
-    }
-
-    pub(crate) fn derive_object(
-        &self,
-        canonical_context: &[u8],
-    ) -> Result<ObjectBackupKey, BackupError> {
-        let mut info = Vec::with_capacity(OBJECT_KEY_LABEL.len() + canonical_context.len());
-        info.extend_from_slice(OBJECT_KEY_LABEL);
-        info.extend_from_slice(canonical_context);
-        let object_key = ObjectBackupKey(derive_hkdf(&self.0, &info)?);
-        info.zeroize();
-        Ok(object_key)
+impl private::Sealed for MnemonicBackupKey {
+    fn derive_account_key_material(&self, account_id: &[u8; 16]) -> Result<[u8; 32], BackupError> {
+        self.derive_account_key_material(account_id)
     }
 }
 
-impl ObjectBackupKey {
-    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
+impl BackupKeyMaterial for MnemonicBackupKey {}
 
-pub(crate) fn derive_hkdf(
-    input_key_material: &[u8; 32],
-    info: &[u8],
-) -> Result<[u8; 32], BackupError> {
-    let mut output = [0_u8; 32];
-    Hkdf::<Sha256>::new(None, input_key_material)
-        .expand(info, &mut output)
-        .map_err(|_| BackupError::invalid_state())?;
-    Ok(output)
-}
-
-impl core::fmt::Debug for BackupMasterKey {
+impl core::fmt::Debug for MnemonicBackupKey {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("BackupMasterKey(REDACTED)")
+        formatter.write_str("MnemonicBackupKey(REDACTED)")
     }
 }

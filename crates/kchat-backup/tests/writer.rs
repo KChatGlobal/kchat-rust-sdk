@@ -1,6 +1,6 @@
 use kchat_backup::{
     BackupAccountId, BackupByteSink, BackupByteSource, BackupChunkId, BackupErrorCode,
-    MnemonicBackupKey, BackupNamespaceId, BackupObjectContextV1, BackupObjectWriterV1,
+    BackupNamespaceId, BackupObjectContextV1, BackupObjectWriterV1, MnemonicBackupKey,
     seal_object_v1,
 };
 use sha2::{Digest, Sha256};
@@ -16,6 +16,14 @@ struct CancelledSource;
 
 struct CancelsAfterFirstRead {
     read_once: bool,
+}
+
+struct OversizedReadSource;
+
+#[derive(Default)]
+struct ChunkingSink {
+    bytes: Vec<u8>,
+    largest_chunk: usize,
 }
 
 impl BackupByteSource for CancelledSource {
@@ -53,12 +61,26 @@ impl BackupByteSource for Source {
     }
 }
 
+impl BackupByteSource for OversizedReadSource {
+    fn read_chunk(&mut self, destination: &mut [u8]) -> Result<usize, kchat_backup::BackupError> {
+        Ok(destination.len() + 1)
+    }
+}
+
 #[derive(Default)]
 struct Sink(Vec<u8>);
 
 impl BackupByteSink for Sink {
     fn write_chunk(&mut self, source: &[u8]) -> Result<(), kchat_backup::BackupError> {
         self.0.extend_from_slice(source);
+        Ok(())
+    }
+}
+
+impl BackupByteSink for ChunkingSink {
+    fn write_chunk(&mut self, source: &[u8]) -> Result<(), kchat_backup::BackupError> {
+        self.largest_chunk = self.largest_chunk.max(source.len());
+        self.bytes.extend_from_slice(source);
         Ok(())
     }
 }
@@ -192,6 +214,39 @@ fn independent_encryptions_use_fresh_nonce_prefixes() {
 
     assert_ne!(&first_sink.0[10..29], &second_sink.0[10..29]);
     assert_ne!(first_sink.0, second_sink.0);
+}
+
+#[test]
+fn writes_ciphertext_to_the_sink_in_bounded_chunks() {
+    let mut state = 0x0123_4567_89ab_cdef_u64;
+    let bytes = (0..(3 * 65_536))
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            (state >> 56) as u8
+        })
+        .collect();
+    let mut source = Source { bytes, offset: 0 };
+    let mut sink = ChunkingSink::default();
+
+    seal_object_v1(&context(), &mut source, &mut sink).unwrap();
+
+    assert!(!sink.bytes.is_empty());
+    assert!(sink.largest_chunk <= 64 * 1024);
+}
+
+#[test]
+fn rejects_a_source_that_violates_the_bounded_read_contract() {
+    let mut source = OversizedReadSource;
+    let mut sink = Sink::default();
+
+    assert_eq!(
+        seal_object_v1(&context(), &mut source, &mut sink)
+            .unwrap_err()
+            .code(),
+        BackupErrorCode::InvalidState
+    );
 }
 
 #[test]

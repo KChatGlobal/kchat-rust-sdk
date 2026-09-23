@@ -55,12 +55,12 @@ fn rejects_mnemonic_backup_key_imports_with_an_invalid_length() {
         MnemonicBackupKey::import_from_secure_storage(&[0x11; 31])
             .unwrap_err()
             .code(),
-        BackupErrorCode::InvalidMasterKey
+        BackupErrorCode::InvalidMnemonicKey
     );
     assert_eq!(
         MnemonicBackupKey::import_from_secure_storage(&[0x11; 33])
             .unwrap_err()
             .code(),
-        BackupErrorCode::InvalidMasterKey
+        BackupErrorCode::InvalidMnemonicKey
     );
 }

@@ -59,6 +59,17 @@ impl PasswordBackupKey {
         Ok(Self(root?))
     }
 
+    pub fn export_for_secure_storage(&self) -> [u8; 32] {
+        self.0
+    }
+
+    pub fn import_from_secure_storage(bytes: &[u8]) -> Result<Self, BackupError> {
+        let key: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| BackupError::invalid_password_key())?;
+        Ok(Self(key))
+    }
+
     fn derive_account_key_material(&self, account_id: &[u8; 16]) -> Result<[u8; 32], BackupError> {
         let mut info = [0_u8; ACCOUNT_KEY_LABEL.len() + 16];
         info[..ACCOUNT_KEY_LABEL.len()].copy_from_slice(ACCOUNT_KEY_LABEL);

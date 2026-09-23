@@ -27,7 +27,7 @@ fn seals_and_opens_a_unified_mnemonic_descriptor() {
 fn seals_and_opens_a_unified_password_descriptor() {
     let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
     let salt = [0x11; 16];
-    let key = PasswordBackupKey::from_password(b"password", &account, salt).unwrap();
+    let key = PasswordBackupKey::from_password(b"password", salt).unwrap();
     let serialized =
         seal_descriptor_v1(&key, &account, DescriptorHeaderV1::password(salt)).unwrap();
 
@@ -44,7 +44,7 @@ fn seals_and_opens_a_unified_password_descriptor() {
 fn rejects_a_structurally_valid_tampered_password_header() {
     let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
     let salt = [0x11; 16];
-    let key = PasswordBackupKey::from_password(b"password", &account, salt).unwrap();
+    let key = PasswordBackupKey::from_password(b"password", salt).unwrap();
     let mut serialized =
         seal_descriptor_v1(&key, &account, DescriptorHeaderV1::password(salt)).unwrap();
 
@@ -91,7 +91,7 @@ fn rejects_wrong_length_nonce_ciphertext_and_tag() {
 fn rejects_descriptors_with_a_key_from_the_other_backup_mode() {
     let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
     let mnemonic_key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
-    let password_key = PasswordBackupKey::from_password(b"password", &account, [0x11; 16]).unwrap();
+    let password_key = PasswordBackupKey::from_password(b"password", [0x11; 16]).unwrap();
     let mnemonic_descriptor =
         seal_descriptor_v1(&mnemonic_key, &account, DescriptorHeaderV1::mnemonic()).unwrap();
     let password_descriptor = seal_descriptor_v1(

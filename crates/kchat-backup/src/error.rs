@@ -5,7 +5,8 @@ pub enum BackupErrorCode {
     InvalidArgument,
     EmptyPassword,
     InvalidMnemonic,
-    InvalidMasterKey,
+    InvalidMnemonicKey,
+    InvalidPasswordKey,
     UnsupportedFormat,
     ContextMismatch,
     IoError,
@@ -49,9 +50,15 @@ impl BackupError {
         }
     }
 
-    pub(crate) const fn invalid_master_key() -> Self {
+    pub(crate) const fn invalid_mnemonic_key() -> Self {
         Self {
-            code: BackupErrorCode::InvalidMasterKey,
+            code: BackupErrorCode::InvalidMnemonicKey,
+        }
+    }
+
+    pub(crate) const fn invalid_password_key() -> Self {
+        Self {
+            code: BackupErrorCode::InvalidPasswordKey,
         }
     }
 

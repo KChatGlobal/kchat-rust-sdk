@@ -16,9 +16,9 @@ impl MnemonicBackupKey {
     pub fn generate() -> Result<(String, Self), BackupError> {
         let mut entropy = [0_u8; 32];
         getrandom::fill(&mut entropy).map_err(|_| BackupError::io_error())?;
-        let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy)
-            .map_err(|_| BackupError::invalid_state())?;
+        let mnemonic_result = Mnemonic::from_entropy_in(Language::English, &entropy);
         entropy.zeroize();
+        let mnemonic = mnemonic_result.map_err(|_| BackupError::invalid_state())?;
         let master_key = Self::from_parsed_mnemonic(&mnemonic)?;
         Ok((mnemonic.to_string(), master_key))
     }
@@ -36,11 +36,17 @@ impl MnemonicBackupKey {
 
         let mut seed = mnemonic.to_seed("");
         let mut key = [0_u8; 32];
-        Hkdf::<Sha256>::new(None, &seed)
+        let expansion = Hkdf::<Sha256>::new(None, &seed)
             .expand(MASTER_KEY_INFO, &mut key)
-            .map_err(|_| BackupError::invalid_state())?;
+            .map_err(|_| BackupError::invalid_state());
         seed.zeroize();
-        Ok(Self(key))
+        match expansion {
+            Ok(()) => Ok(Self(key)),
+            Err(error) => {
+                key.zeroize();
+                Err(error)
+            }
+        }
     }
 
     pub fn export_for_secure_storage(&self) -> [u8; 32] {
@@ -50,7 +56,7 @@ impl MnemonicBackupKey {
     pub fn import_from_secure_storage(bytes: &[u8]) -> Result<Self, BackupError> {
         let key: [u8; 32] = bytes
             .try_into()
-            .map_err(|_| BackupError::invalid_master_key())?;
+            .map_err(|_| BackupError::invalid_mnemonic_key())?;
         Ok(Self(key))
     }
 

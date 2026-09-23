@@ -89,10 +89,25 @@ struct FailingSink {
     writes: usize,
 }
 
+struct FailingAfterWrite {
+    writes: usize,
+    fail_on_write: usize,
+}
+
 impl BackupByteSink for FailingSink {
     fn write_chunk(&mut self, _: &[u8]) -> Result<(), kchat_backup::BackupError> {
         self.writes += 1;
         Err(MnemonicBackupKey::from_mnemonic("not a valid mnemonic").unwrap_err())
+    }
+}
+
+impl BackupByteSink for FailingAfterWrite {
+    fn write_chunk(&mut self, _: &[u8]) -> Result<(), kchat_backup::BackupError> {
+        self.writes += 1;
+        if self.writes == self.fail_on_write {
+            return Err(MnemonicBackupKey::from_mnemonic("not a valid mnemonic").unwrap_err());
+        }
+        Ok(())
     }
 }
 
@@ -137,6 +152,38 @@ fn never_returns_a_descriptor_after_a_sink_failure() {
 
     assert_eq!(error.code(), BackupErrorCode::InvalidMnemonic);
     assert_eq!(sink.writes, 1);
+}
+
+#[test]
+fn never_returns_a_descriptor_when_the_final_block_write_fails() {
+    let mut source = Source {
+        bytes: Vec::new(),
+        offset: 0,
+    };
+    let mut sink = FailingAfterWrite {
+        writes: 0,
+        fail_on_write: 2,
+    };
+
+    let error = seal_object_v1(&context(), &mut source, &mut sink).unwrap_err();
+
+    assert_eq!(error.code(), BackupErrorCode::InvalidMnemonic);
+    assert_eq!(sink.writes, 2);
+}
+
+#[test]
+fn empty_plaintext_has_exactly_one_authenticated_final_block() {
+    let mut source = Source {
+        bytes: Vec::new(),
+        offset: 0,
+    };
+    let mut sink = Sink::default();
+
+    seal_object_v1(&context(), &mut source, &mut sink).unwrap();
+
+    let ciphertext_length = u32::from_be_bytes(sink.0[29..33].try_into().unwrap()) as usize;
+    assert_eq!(sink.0.len(), 29 + 4 + ciphertext_length);
+    assert!((16..=65_552).contains(&ciphertext_length));
 }
 
 #[test]
@@ -290,6 +337,36 @@ fn rejects_writes_and_a_second_finish_after_successful_finish() {
     );
     assert_eq!(
         writer.finish().unwrap_err().code(),
+        BackupErrorCode::InvalidState
+    );
+}
+
+#[test]
+fn rejects_operations_after_a_final_block_sink_failure() {
+    let context = context();
+    let mut sink = FailingAfterWrite {
+        writes: 0,
+        fail_on_write: 2,
+    };
+    let mut writer = BackupObjectWriterV1::new(&context, &mut sink).unwrap();
+
+    assert_eq!(
+        writer.finish().unwrap_err().code(),
+        BackupErrorCode::InvalidMnemonic
+    );
+    assert_eq!(
+        writer
+            .write_plaintext(b"must not encrypt")
+            .unwrap_err()
+            .code(),
+        BackupErrorCode::InvalidState
+    );
+    assert_eq!(
+        writer.finish().unwrap_err().code(),
+        BackupErrorCode::InvalidState
+    );
+    assert_eq!(
+        writer.abort().unwrap_err().code(),
         BackupErrorCode::InvalidState
     );
 }

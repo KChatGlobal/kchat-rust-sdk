@@ -59,6 +59,63 @@ fn rejects_a_structurally_valid_tampered_password_header() {
 }
 
 #[test]
+fn rejects_wrong_length_nonce_ciphertext_and_tag() {
+    let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
+    let key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
+    let serialized = seal_descriptor_v1(&key, &account, DescriptorHeaderV1::mnemonic()).unwrap();
+    let mut too_long = serialized.clone();
+    too_long.push(0);
+
+    for invalid in [&serialized[..109], too_long.as_slice()] {
+        assert_eq!(
+            open_descriptor_v1(&key, &account, invalid)
+                .unwrap_err()
+                .code(),
+            BackupErrorCode::InvalidArgument
+        );
+    }
+
+    for index in [26, 50, 109] {
+        let mut tampered = serialized.clone();
+        tampered[index] ^= 1;
+        assert_eq!(
+            open_descriptor_v1(&key, &account, &tampered)
+                .unwrap_err()
+                .code(),
+            BackupErrorCode::AuthenticationFailed
+        );
+    }
+}
+
+#[test]
+fn rejects_descriptors_with_a_key_from_the_other_backup_mode() {
+    let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
+    let mnemonic_key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
+    let password_key = PasswordBackupKey::from_password(b"password", &account, [0x11; 16]).unwrap();
+    let mnemonic_descriptor =
+        seal_descriptor_v1(&mnemonic_key, &account, DescriptorHeaderV1::mnemonic()).unwrap();
+    let password_descriptor = seal_descriptor_v1(
+        &password_key,
+        &account,
+        DescriptorHeaderV1::password([0x11; 16]),
+    )
+    .unwrap();
+
+    assert_eq!(
+        open_descriptor_v1(&password_key, &account, &mnemonic_descriptor)
+            .unwrap_err()
+            .code(),
+        BackupErrorCode::AuthenticationFailed
+    );
+    assert_eq!(
+        open_descriptor_v1(&mnemonic_key, &account, &password_descriptor)
+            .unwrap_err()
+            .code(),
+        BackupErrorCode::AuthenticationFailed
+    );
+}
+
+#[test]
 fn rejects_invalid_headers_before_key_derivation_and_tampering_afterwards() {
     let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
     let key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();

@@ -47,7 +47,10 @@ pub(crate) fn derive_account_key(
 
 impl AccountBackupKey {
     pub(crate) fn derive_descriptor(&self) -> Result<DescriptorBackupKey, BackupError> {
-        Ok(DescriptorBackupKey(derive_hkdf(&self.0, DESCRIPTOR_KEY_LABEL)?))
+        Ok(DescriptorBackupKey(derive_hkdf(
+            &self.0,
+            DESCRIPTOR_KEY_LABEL,
+        )?))
     }
     pub(crate) fn derive_namespace(&self) -> Result<[u8; 32], BackupError> {
         derive_hkdf(&self.0, NAMESPACE_KEY_LABEL)
@@ -65,7 +68,12 @@ impl AccountBackupKey {
         Ok(object_key)
     }
 }
-impl DescriptorBackupKey { pub(crate) fn as_bytes(&self) -> &[u8; 32] { &self.0 } }
+
+impl DescriptorBackupKey {
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 impl ObjectBackupKey {
     pub(crate) fn as_bytes(&self) -> &[u8; 32] {

@@ -12,7 +12,9 @@ pub use account::BackupAccountId;
 pub use context::{
     BACKUP_FORMAT_VERSION_V1, BackupChunkId, BackupNamespaceId, BackupObjectContextV1,
 };
-pub use descriptor::{open_descriptor_v1, seal_descriptor_v1};
+pub use descriptor::{
+    DescriptorBackupModeV1, DescriptorHeaderV1, open_descriptor_v1, seal_descriptor_v1,
+};
 pub use error::{BackupError, BackupErrorCode};
 pub use key::{BackupKeyMaterial, MnemonicBackupKey, PasswordBackupKey};
 pub use limits::{

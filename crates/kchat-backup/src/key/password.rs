@@ -1,7 +1,7 @@
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{BackupAccountId, BackupError};
+use crate::BackupError;
 
 use super::{ACCOUNT_KEY_LABEL, BackupKeyMaterial, derive_hkdf, private};
 
@@ -15,11 +15,17 @@ const ARGON2_OUTPUT_BYTES_V1: usize = 32;
 pub struct PasswordBackupKey([u8; 32]);
 
 impl PasswordBackupKey {
-    pub fn from_password(
-        password_raw_utf8: &[u8],
-        account_id: &BackupAccountId,
-        salt: [u8; 16],
-    ) -> Result<Self, BackupError> {
+    pub fn generate(password_raw_utf8: &[u8]) -> Result<([u8; 16], Self), BackupError> {
+        if password_raw_utf8.is_empty() {
+            return Err(BackupError::empty_password());
+        }
+        let mut salt = [0_u8; 16];
+        getrandom::fill(&mut salt).map_err(|_| BackupError::io_error())?;
+        let key = Self::from_password(password_raw_utf8, salt)?;
+        Ok((salt, key))
+    }
+
+    pub fn from_password(password_raw_utf8: &[u8], salt: [u8; 16]) -> Result<Self, BackupError> {
         if password_raw_utf8.is_empty() {
             return Err(BackupError::empty_password());
         }
@@ -50,12 +56,8 @@ impl PasswordBackupKey {
             return Err(BackupError::invalid_state());
         }
 
-        let mut info = Vec::with_capacity(PASSWORD_ROOT_LABEL.len() + 16);
-        info.extend_from_slice(PASSWORD_ROOT_LABEL);
-        info.extend_from_slice(account_id.as_bytes());
-        let root = derive_hkdf(&password_kdf, &info);
+        let root = derive_hkdf(&password_kdf, PASSWORD_ROOT_LABEL);
         password_kdf.zeroize();
-        info.zeroize();
         Ok(Self(root?))
     }
 

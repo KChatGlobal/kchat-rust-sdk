@@ -10,17 +10,17 @@ const EXPECTED_KEY: [u8; 32] = [
 fn derives_a_mnemonic_backup_key_from_a_valid_phrase() {
     let key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
 
-    assert_eq!(key.export_for_secure_storage(), EXPECTED_KEY);
+    assert_eq!(key.export_raw(), EXPECTED_KEY);
     assert_eq!(format!("{key:?}"), "MnemonicBackupKey(REDACTED)");
 }
 
 #[test]
 fn rejects_invalid_mnemonic_input() {
-    let twelve_word = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let invalid_checksum = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
     let non_english = "こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは こんにちは";
 
     assert_eq!(
-        MnemonicBackupKey::from_mnemonic(twelve_word)
+        MnemonicBackupKey::from_mnemonic(invalid_checksum)
             .unwrap_err()
             .code(),
         BackupErrorCode::InvalidMnemonic
@@ -34,31 +34,52 @@ fn rejects_invalid_mnemonic_input() {
 }
 
 #[test]
+fn restores_a_twelve_word_mnemonic_backup_key() {
+    let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let key = MnemonicBackupKey::from_mnemonic(phrase).unwrap();
+    let imported = MnemonicBackupKey::import_from_raw(&key.export_raw()).unwrap();
+
+    assert_eq!(key.export_raw(), imported.export_raw());
+}
+
+#[test]
 fn generates_a_recoverable_mnemonic_backup_key() {
-    let (phrase, generated_key) = MnemonicBackupKey::generate().unwrap();
+    for word_count in [12, 15, 18, 21, 24] {
+        let (phrase, generated_key) = MnemonicBackupKey::generate(word_count).unwrap();
 
-    println!("{:?}", phrase);
+        println!("{:?}", phrase);
 
-    assert_eq!(phrase.split_whitespace().count(), 24);
-    assert_eq!(
-        generated_key.export_for_secure_storage(),
-        MnemonicBackupKey::from_mnemonic(&phrase)
-            .unwrap()
-            .export_for_secure_storage()
-    );
-    assert_eq!(format!("{generated_key:?}"), "MnemonicBackupKey(REDACTED)");
+        assert_eq!(phrase.split_whitespace().count(), word_count as usize);
+        assert_eq!(
+            generated_key.export_raw(),
+            MnemonicBackupKey::from_mnemonic(&phrase)
+                .unwrap()
+                .export_raw()
+        );
+        assert_eq!(format!("{generated_key:?}"), "MnemonicBackupKey(REDACTED)");
+    }
+}
+
+#[test]
+fn rejects_unsupported_mnemonic_word_counts() {
+    for word_count in [0, 1, 11, 13, 14, 16, 17, 19, 20, 22, 23, 25, u32::MAX] {
+        assert_eq!(
+            MnemonicBackupKey::generate(word_count).unwrap_err().code(),
+            BackupErrorCode::InvalidArgument
+        );
+    }
 }
 
 #[test]
 fn rejects_mnemonic_backup_key_imports_with_an_invalid_length() {
     assert_eq!(
-        MnemonicBackupKey::import_from_secure_storage(&[0x11; 31])
+        MnemonicBackupKey::import_from_raw(&[0x11; 31])
             .unwrap_err()
             .code(),
         BackupErrorCode::InvalidMnemonicKey
     );
     assert_eq!(
-        MnemonicBackupKey::import_from_secure_storage(&[0x11; 33])
+        MnemonicBackupKey::import_from_raw(&[0x11; 33])
             .unwrap_err()
             .code(),
         BackupErrorCode::InvalidMnemonicKey

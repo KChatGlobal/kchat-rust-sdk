@@ -49,8 +49,8 @@ pub struct GeneratedPasswordBackupKey {
 }
 
 #[uniffi::export]
-pub fn generate_mnemonic() -> Result<GeneratedMnemonicBackupKey, BackupFfiError> {
-    let (mnemonic, key) = MnemonicBackupKey::generate()?;
+pub fn generate_mnemonic(word_count: u32) -> Result<GeneratedMnemonicBackupKey, BackupFfiError> {
+    let (mnemonic, key) = MnemonicBackupKey::generate(word_count)?;
     Ok(GeneratedMnemonicBackupKey {
         mnemonic,
         key: Arc::new(BackupMasterKey {
@@ -75,17 +75,18 @@ pub fn generate_password(
 }
 
 #[uniffi::export]
-pub fn import_from_secure_storage(
+pub fn import_from_raw(
     mode: BackupKeyMode,
     mut bytes: Vec<u8>,
 ) -> Result<Arc<BackupMasterKey>, BackupFfiError> {
-    let result =
-        match mode {
-            BackupKeyMode::Mnemonic => MnemonicBackupKey::import_from_secure_storage(&bytes)
-                .map(CoreBackupMasterKey::Mnemonic),
-            BackupKeyMode::Password => PasswordBackupKey::import_from_secure_storage(&bytes)
-                .map(CoreBackupMasterKey::Password),
-        };
+    let result = match mode {
+        BackupKeyMode::Mnemonic => {
+            MnemonicBackupKey::import_from_raw(&bytes).map(CoreBackupMasterKey::Mnemonic)
+        }
+        BackupKeyMode::Password => {
+            PasswordBackupKey::import_from_raw(&bytes).map(CoreBackupMasterKey::Password)
+        }
+    };
     bytes.zeroize();
     let key = result?;
     Ok(Arc::new(BackupMasterKey { key }))
@@ -100,10 +101,10 @@ impl BackupMasterKey {
         }
     }
 
-    pub fn export_for_secure_storage(&self) -> Vec<u8> {
+    pub fn export_raw(&self) -> Vec<u8> {
         match &self.key {
-            CoreBackupMasterKey::Mnemonic(key) => key.export_for_secure_storage().to_vec(),
-            CoreBackupMasterKey::Password(key) => key.export_for_secure_storage().to_vec(),
+            CoreBackupMasterKey::Mnemonic(key) => key.export_raw().to_vec(),
+            CoreBackupMasterKey::Password(key) => key.export_raw().to_vec(),
         }
     }
 

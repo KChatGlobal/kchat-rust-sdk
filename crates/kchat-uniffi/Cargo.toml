@@ -1,0 +1,25 @@
+[package]
+name = "kchat-uniffi"
+description = "UniFFI bindings exposing KChat encrypted backup key and writer APIs."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+crate-type = ["staticlib", "lib", "cdylib"]
+name = "kchat_mobile_sdk_rs"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+kchat-backup = { path = "../kchat-backup" }
+thiserror = { workspace = true }
+uniffi = { version = "0.31", features = ["cli"] }
+zeroize = { workspace = true }

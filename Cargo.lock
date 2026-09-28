@@ -1634,6 +1634,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kchat-uniffi"
+version = "0.2.0"
+dependencies = [
+ "kchat-backup",
+ "thiserror",
+ "uniffi",
+ "zeroize",
+]
+
+[[package]]
 name = "kchat_mls_napi"
 version = "0.2.0"
 dependencies = [

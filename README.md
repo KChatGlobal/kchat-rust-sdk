@@ -8,9 +8,10 @@ A Cargo workspace containing the Rust SDK that powers the [Messaging Layer Secur
 
 ## Workspace Layout
 
-The workspace is composed of five crates under `crates/`:
+The workspace is composed of crates under `crates/`:
 
 - **`kchat-storage-provider`** — SQLite-backed implementation of the OpenMLS `StorageProvider` trait. Uses `rusqlite` with `r2d2` connection pooling and `refinery` migrations (see `crates/kchat-storage-provider/migrations`).
+- **`kchat-backup`** — encrypted-backup core: typed key derivation, `KCBD` descriptors, and bounded encrypted object writing.
 - **`uq-openmls`** — Thin wrapper around OpenMLS exposing the core MLS primitives (group creation, welcome processing, proposal/commit handling, fork resolution) used by KChat. Also wires the SQLite storage provider into an `OpenMlsProvider`.
 - **`kchat-mls`** — High-level KChat MLS logic on top of `uq-openmls`: group lifecycle management, batch message processing, group-status persistence, and tree-hash bookkeeping.
 - **`kchat-mls-uniffi`** — [UniFFI](https://mozilla.github.io/uniffi-rs/) bindings that produce a Swift package and Kotlin/Android JNI libraries from `kchat-mls`. Crate type: `staticlib`, `cdylib`, `lib`.

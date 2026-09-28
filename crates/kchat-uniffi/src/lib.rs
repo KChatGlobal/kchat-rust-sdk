@@ -1,0 +1,15 @@
+uniffi::setup_scaffolding!();
+
+mod error;
+mod key;
+mod writer;
+
+pub use error::BackupFfiError;
+pub use key::{
+    BackupDescriptorBootstrap, BackupKeyMode, BackupMasterKey, BackupObjectContext,
+    GeneratedMnemonicBackupKey, GeneratedPasswordBackupKey, generate_mnemonic, generate_password,
+    import_from_secure_storage,
+};
+pub use writer::{
+    BackupCiphertextSink, BackupObjectMetadata, BackupPlaintextSource, seal_backup_object_v1,
+};

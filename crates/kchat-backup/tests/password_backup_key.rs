@@ -1,5 +1,5 @@
 use kchat_backup::{
-    BackupAccountId, BackupChunkId, BackupErrorCode, BackupNamespaceId, BackupObjectContextV1,
+    BackupAccountId, BackupChunkId, BackupErrorCode, BackupId, BackupObjectContextV1,
     PasswordBackupKey,
 };
 
@@ -30,8 +30,8 @@ fn exports_and_imports_a_password_backup_key_for_secure_storage() {
     let imported = PasswordBackupKey::import_from_secure_storage(&exported).unwrap();
 
     assert_eq!(
-        BackupNamespaceId::derive(&key, &account).unwrap(),
-        BackupNamespaceId::derive(&imported, &account).unwrap()
+        BackupId::derive(&key, &account).unwrap(),
+        BackupId::derive(&imported, &account).unwrap()
     );
     assert_eq!(format!("{imported:?}"), "PasswordBackupKey(REDACTED)");
 }
@@ -65,43 +65,31 @@ fn derives_an_account_independent_password_master_key_from_exact_raw_bytes_and_s
     let decomposed = PasswordBackupKey::from_password("cafe\u{301}".as_bytes(), SALT).unwrap();
     let other_salt_key = PasswordBackupKey::from_password(password, [0x22; 16]).unwrap();
 
-    let namespace = BackupNamespaceId::derive(&key, &account).unwrap();
+    let backup_id = BackupId::derive(&key, &account).unwrap();
     assert_eq!(
         key.export_for_secure_storage(),
         same_key.export_for_secure_storage()
     );
-    assert_eq!(
-        namespace,
-        BackupNamespaceId::derive(&same_key, &account).unwrap()
-    );
+    assert_eq!(backup_id, BackupId::derive(&same_key, &account).unwrap());
     assert_ne!(
-        namespace,
-        BackupNamespaceId::derive(&trailing_space, &account).unwrap()
+        backup_id,
+        BackupId::derive(&trailing_space, &account).unwrap()
     );
+    assert_ne!(backup_id, BackupId::derive(&composed, &account).unwrap());
+    assert_ne!(backup_id, BackupId::derive(&decomposed, &account).unwrap());
     assert_ne!(
-        namespace,
-        BackupNamespaceId::derive(&composed, &account).unwrap()
+        BackupId::derive(&composed, &account).unwrap(),
+        BackupId::derive(&decomposed, &account).unwrap()
     );
+    assert_ne!(backup_id, BackupId::derive(&key, &other_account).unwrap());
     assert_ne!(
-        namespace,
-        BackupNamespaceId::derive(&decomposed, &account).unwrap()
-    );
-    assert_ne!(
-        BackupNamespaceId::derive(&composed, &account).unwrap(),
-        BackupNamespaceId::derive(&decomposed, &account).unwrap()
-    );
-    assert_ne!(
-        namespace,
-        BackupNamespaceId::derive(&key, &other_account).unwrap()
-    );
-    assert_ne!(
-        namespace,
-        BackupNamespaceId::derive(&other_salt_key, &account).unwrap()
+        backup_id,
+        BackupId::derive(&other_salt_key, &account).unwrap()
     );
 
     let chunk = BackupChunkId::from_bytes([0x33; 16]).unwrap();
-    let context = BackupObjectContextV1::new(&key, account, namespace, 1, chunk).unwrap();
-    let same_context = BackupObjectContextV1::new(&same_key, account, namespace, 1, chunk).unwrap();
+    let context = BackupObjectContextV1::new(&key, account, backup_id, 1, chunk).unwrap();
+    let same_context = BackupObjectContextV1::new(&same_key, account, backup_id, 1, chunk).unwrap();
     assert_eq!(context.canonical_bytes(), same_context.canonical_bytes());
     assert_eq!(format!("{key:?}"), "PasswordBackupKey(REDACTED)");
 }

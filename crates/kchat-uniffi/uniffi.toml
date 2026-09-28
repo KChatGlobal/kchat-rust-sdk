@@ -1,0 +1,7 @@
+[bindings.kotlin]
+package_name = "com.kchat.sdk"
+android = true
+
+[bindings.swift]
+ffi_module_name = "KChat"
+ffi_module_filename = "KChat"

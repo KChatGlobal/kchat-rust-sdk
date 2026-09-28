@@ -16,9 +16,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
 };
 
-use crate::{
-    BackupAccountId, BackupError, BackupKeyMaterial, BackupNamespaceId, key::derive_account_key,
-};
+use crate::{BackupAccountId, BackupError, BackupId, BackupKeyMaterial, key::derive_account_key};
 
 const MAGIC: &[u8; 4] = b"KCBD";
 const FORMAT_VERSION: u16 = 1;
@@ -124,10 +122,10 @@ pub fn seal_descriptor_v1(
     header: DescriptorHeaderV1,
 ) -> Result<Vec<u8>, BackupError> {
     header.validate()?;
-    let namespace = BackupNamespaceId::derive(master_key, account_id)?;
+    let backup_id = BackupId::derive(master_key, account_id)?;
     let descriptor_key = derive_descriptor_key(master_key, account_id)?;
-    let aad = descriptor_aad(&header, &namespace);
-    let plaintext = descriptor_plaintext(&namespace);
+    let aad = descriptor_aad(&header, &backup_id);
+    let plaintext = descriptor_plaintext(&backup_id);
 
     let mut nonce = [0_u8; NONCE_BYTES];
     getrandom::fill(&mut nonce).map_err(|_| BackupError::io_error())?;
@@ -155,11 +153,11 @@ pub fn open_descriptor_v1(
     master_key: &impl BackupKeyMaterial,
     account_id: &BackupAccountId,
     serialized: &[u8],
-) -> Result<(DescriptorHeaderV1, BackupNamespaceId), BackupError> {
+) -> Result<(DescriptorHeaderV1, BackupId), BackupError> {
     let header = DescriptorHeaderV1::parse(serialized)?;
-    let namespace = BackupNamespaceId::derive(master_key, account_id)?;
+    let backup_id = BackupId::derive(master_key, account_id)?;
     let descriptor_key = derive_descriptor_key(master_key, account_id)?;
-    let aad = descriptor_aad(&header, &namespace);
+    let aad = descriptor_aad(&header, &backup_id);
     let cipher = XChaCha20Poly1305::new_from_slice(descriptor_key.as_bytes())
         .map_err(|_| BackupError::invalid_state())?;
     let nonce = XNonce::try_from(&serialized[HEADER_BYTES..HEADER_BYTES + NONCE_BYTES])
@@ -173,8 +171,8 @@ pub fn open_descriptor_v1(
             },
         )
         .map_err(|_| BackupError::authentication_failed())?;
-    validate_plaintext(&plaintext, namespace)?;
-    Ok((header, namespace))
+    validate_plaintext(&plaintext, backup_id)?;
+    Ok((header, backup_id))
 }
 
 fn derive_descriptor_key(
@@ -184,20 +182,20 @@ fn derive_descriptor_key(
     derive_account_key(master_key, account_id.as_bytes())?.derive_descriptor()
 }
 
-fn descriptor_plaintext(namespace: &BackupNamespaceId) -> [u8; PLAINTEXT_BYTES] {
+fn descriptor_plaintext(backup_id: &BackupId) -> [u8; PLAINTEXT_BYTES] {
     let mut plaintext = [0_u8; PLAINTEXT_BYTES];
     plaintext[..4].copy_from_slice(MAGIC);
     plaintext[4..6].copy_from_slice(&FORMAT_VERSION.to_be_bytes());
-    plaintext[6..38].copy_from_slice(namespace.as_bytes());
+    plaintext[6..38].copy_from_slice(backup_id.as_bytes());
     plaintext[38..40].copy_from_slice(&1_u16.to_be_bytes());
     plaintext
 }
 
-fn validate_plaintext(plaintext: &[u8], namespace: BackupNamespaceId) -> Result<(), BackupError> {
+fn validate_plaintext(plaintext: &[u8], backup_id: BackupId) -> Result<(), BackupError> {
     if plaintext.len() != PLAINTEXT_BYTES
         || plaintext[..4] != *MAGIC
         || plaintext[4..6] != FORMAT_VERSION.to_be_bytes()
-        || plaintext[6..38] != *namespace.as_bytes()
+        || plaintext[6..38] != *backup_id.as_bytes()
         || plaintext[38..40] != 1_u16.to_be_bytes()
         || plaintext[40..44] != [0_u8; 4]
     {
@@ -206,10 +204,10 @@ fn validate_plaintext(plaintext: &[u8], namespace: BackupNamespaceId) -> Result<
     Ok(())
 }
 
-fn descriptor_aad(header: &DescriptorHeaderV1, namespace: &BackupNamespaceId) -> Vec<u8> {
+fn descriptor_aad(header: &DescriptorHeaderV1, backup_id: &BackupId) -> Vec<u8> {
     let mut aad = Vec::with_capacity(AAD_LABEL.len() + HEADER_BYTES + 32);
     aad.extend_from_slice(AAD_LABEL);
     aad.extend_from_slice(&header.0);
-    aad.extend_from_slice(namespace.as_bytes());
+    aad.extend_from_slice(backup_id.as_bytes());
     aad
 }

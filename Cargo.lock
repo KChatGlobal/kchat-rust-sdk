@@ -1638,8 +1638,19 @@ name = "kchat-uniffi"
 version = "0.2.0"
 dependencies = [
  "kchat-backup",
+ "kchat-mls",
+ "kchat_storage_provider",
+ "openmls",
+ "openmls_basic_credential",
+ "openmls_rust_crypto",
+ "openmls_traits",
+ "rusqlite",
+ "secrecy",
+ "sha2 0.10.9",
  "thiserror",
+ "tokio",
  "uniffi",
+ "uq-openmls",
  "zeroize",
 ]
 

@@ -23,7 +23,8 @@ pub struct BackupError {
 }
 
 impl BackupError {
-    pub(crate) const fn from_code(code: BackupErrorCode) -> Self {
+    #[doc(hidden)]
+    pub const fn from_code(code: BackupErrorCode) -> Self {
         Self { code }
     }
 

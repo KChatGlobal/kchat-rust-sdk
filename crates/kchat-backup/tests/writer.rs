@@ -1,7 +1,6 @@
 use kchat_backup::{
-    BackupAccountId, BackupByteSink, BackupByteSource, BackupChunkId, BackupErrorCode,
-    BackupNamespaceId, BackupObjectContextV1, BackupObjectWriterV1, MnemonicBackupKey,
-    seal_object_v1,
+    BackupAccountId, BackupByteSink, BackupByteSource, BackupChunkId, BackupErrorCode, BackupId,
+    BackupObjectContextV1, BackupObjectWriterV1, MnemonicBackupKey, seal_object_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -114,9 +113,9 @@ impl BackupByteSink for FailingAfterWrite {
 fn context() -> BackupObjectContextV1 {
     let master_key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
     let account = BackupAccountId::parse("00112233-4455-6677-8899-aabbccddeeff").unwrap();
-    let namespace = BackupNamespaceId::derive(&master_key, &account).unwrap();
+    let backup_id = BackupId::derive(&master_key, &account).unwrap();
     let chunk_id = BackupChunkId::from_bytes([7; 16]).unwrap();
-    BackupObjectContextV1::new(&master_key, account, namespace, 1, chunk_id).unwrap()
+    BackupObjectContextV1::new(&master_key, account, backup_id, 1, chunk_id).unwrap()
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use kchat_backup::{
-    BackupAccountId, BackupChunkId, BackupErrorCode, BackupNamespaceId, BackupObjectContextV1,
+    BackupAccountId, BackupChunkId, BackupErrorCode, BackupId, BackupObjectContextV1,
     MnemonicBackupKey,
 };
 
@@ -24,32 +24,47 @@ fn rejects_invalid_account_id_input() {
 }
 
 #[test]
-fn validates_namespace_before_constructing_an_object_context() {
+fn backup_id_derivation_keeps_v1_bytes() {
+    let master_key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
+    let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
+    let backup_id = BackupId::derive(&master_key, &account).unwrap();
+
+    assert_eq!(
+        *backup_id.as_bytes(),
+        [
+            190, 61, 122, 127, 200, 27, 93, 99, 83, 185, 152, 48, 82, 221, 214, 187, 43, 113, 214,
+            87, 32, 184, 49, 68, 142, 201, 226, 242, 224, 21, 241, 116,
+        ]
+    );
+}
+
+#[test]
+fn validates_backup_id_before_constructing_an_object_context() {
     let master_key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
     let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
     let other_account = BackupAccountId::parse("ffeeddcc-bbaa-9988-7766-554433221100").unwrap();
-    let namespace = BackupNamespaceId::derive(&master_key, &account).unwrap();
-    let wrong_namespace = BackupNamespaceId::derive(&master_key, &other_account).unwrap();
+    let backup_id = BackupId::derive(&master_key, &account).unwrap();
+    let wrong_backup_id = BackupId::derive(&master_key, &other_account).unwrap();
     let chunk = BackupChunkId::from_bytes([0x11; 16]).unwrap();
     assert_eq!(
-        BackupObjectContextV1::new(&master_key, account, wrong_namespace, 1, chunk)
+        BackupObjectContextV1::new(&master_key, account, wrong_backup_id, 1, chunk)
             .unwrap_err()
             .code(),
         BackupErrorCode::ContextMismatch
     );
-    assert!(BackupObjectContextV1::new(&master_key, account, namespace, 1, chunk).is_ok());
+    assert!(BackupObjectContextV1::new(&master_key, account, backup_id, 1, chunk).is_ok());
 }
 
 #[test]
 fn encodes_a_validated_object_context_with_fixed_big_endian_fields() {
     let master_key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
     let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
-    let namespace = BackupNamespaceId::derive(&master_key, &account).unwrap();
+    let backup_id = BackupId::derive(&master_key, &account).unwrap();
     let chunk = BackupChunkId::from_bytes([0xaa; 16]).unwrap();
-    let context = BackupObjectContextV1::new(&master_key, account, namespace, 1, chunk).unwrap();
+    let context = BackupObjectContextV1::new(&master_key, account, backup_id, 1, chunk).unwrap();
     let mut expected = b"KCHAT_BACKUP_OBJECT_CONTEXT_V1".to_vec();
     expected.extend_from_slice(&[0x00, 0x01]);
-    expected.extend_from_slice(namespace.as_bytes());
+    expected.extend_from_slice(backup_id.as_bytes());
     expected.extend_from_slice(&[0xaa; 16]);
     assert_eq!(context.canonical_bytes(), expected.as_slice());
     assert_eq!(
@@ -57,7 +72,7 @@ fn encodes_a_validated_object_context_with_fixed_big_endian_fields() {
         BackupErrorCode::InvalidArgument
     );
     assert_eq!(
-        BackupObjectContextV1::new(&master_key, account, namespace, 2, chunk)
+        BackupObjectContextV1::new(&master_key, account, backup_id, 2, chunk)
             .unwrap_err()
             .code(),
         BackupErrorCode::UnsupportedFormat

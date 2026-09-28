@@ -1,7 +1,7 @@
 use bip39::{Language, Mnemonic};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::BackupError;
 
@@ -13,8 +13,16 @@ const MASTER_KEY_INFO: &[u8] = b"KCHAT_BACKUP_V1_MASTER";
 pub struct MnemonicBackupKey([u8; 32]);
 
 impl MnemonicBackupKey {
-    pub fn generate() -> Result<(String, Self), BackupError> {
-        let mut entropy = [0_u8; 32];
+    pub fn generate(word_count: u32) -> Result<(String, Self), BackupError> {
+        let entropy_len = match word_count {
+            12 => 16,
+            15 => 20,
+            18 => 24,
+            21 => 28,
+            24 => 32,
+            _ => return Err(BackupError::invalid_argument()),
+        };
+        let mut entropy = Zeroizing::new(vec![0_u8; entropy_len]);
         getrandom::fill(&mut entropy).map_err(|_| BackupError::io_error())?;
         let mnemonic_result = Mnemonic::from_entropy_in(Language::English, &entropy);
         entropy.zeroize();
@@ -30,10 +38,6 @@ impl MnemonicBackupKey {
     }
 
     fn from_parsed_mnemonic(mnemonic: &Mnemonic) -> Result<Self, BackupError> {
-        if mnemonic.word_count() != 24 {
-            return Err(BackupError::invalid_mnemonic());
-        }
-
         let mut seed = mnemonic.to_seed("");
         let mut key = [0_u8; 32];
         let expansion = Hkdf::<Sha256>::new(None, &seed)
@@ -49,11 +53,11 @@ impl MnemonicBackupKey {
         }
     }
 
-    pub fn export_for_secure_storage(&self) -> [u8; 32] {
+    pub fn export_raw(&self) -> [u8; 32] {
         self.0
     }
 
-    pub fn import_from_secure_storage(bytes: &[u8]) -> Result<Self, BackupError> {
+    pub fn import_from_raw(bytes: &[u8]) -> Result<Self, BackupError> {
         let key: [u8; 32] = bytes
             .try_into()
             .map_err(|_| BackupError::invalid_mnemonic_key())?;

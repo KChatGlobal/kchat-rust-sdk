@@ -61,11 +61,11 @@ impl PasswordBackupKey {
         Ok(Self(root?))
     }
 
-    pub fn export_for_secure_storage(&self) -> [u8; 32] {
+    pub fn export_raw(&self) -> [u8; 32] {
         self.0
     }
 
-    pub fn import_from_secure_storage(bytes: &[u8]) -> Result<Self, BackupError> {
+    pub fn import_from_raw(bytes: &[u8]) -> Result<Self, BackupError> {
         let key: [u8; 32] = bytes
             .try_into()
             .map_err(|_| BackupError::invalid_password_key())?;

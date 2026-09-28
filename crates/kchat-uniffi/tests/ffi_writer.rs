@@ -114,7 +114,7 @@ fn rejects_callback_source_chunks_larger_than_the_requested_bound() {
 }
 
 fn context() -> Arc<BackupObjectContext> {
-    let generated = generate_mnemonic().unwrap();
+    let generated = generate_mnemonic(24).unwrap();
     let backup_id = generated.key.derive_backup_id(ACCOUNT.to_owned()).unwrap();
     generated
         .key

@@ -25,9 +25,9 @@ fn rejects_invalid_password_input_before_key_derivation() {
 fn exports_and_imports_a_password_backup_key_for_secure_storage() {
     let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
     let key = PasswordBackupKey::from_password(b"password", SALT).unwrap();
-    let exported = key.export_for_secure_storage();
+    let exported = key.export_raw();
 
-    let imported = PasswordBackupKey::import_from_secure_storage(&exported).unwrap();
+    let imported = PasswordBackupKey::import_from_raw(&exported).unwrap();
 
     assert_eq!(
         BackupId::derive(&key, &account).unwrap(),
@@ -39,13 +39,13 @@ fn exports_and_imports_a_password_backup_key_for_secure_storage() {
 #[test]
 fn rejects_password_backup_key_imports_with_an_invalid_length() {
     assert_eq!(
-        PasswordBackupKey::import_from_secure_storage(&[0x11; 31])
+        PasswordBackupKey::import_from_raw(&[0x11; 31])
             .unwrap_err()
             .code(),
         BackupErrorCode::InvalidPasswordKey
     );
     assert_eq!(
-        PasswordBackupKey::import_from_secure_storage(&[0x11; 33])
+        PasswordBackupKey::import_from_raw(&[0x11; 33])
             .unwrap_err()
             .code(),
         BackupErrorCode::InvalidPasswordKey
@@ -66,10 +66,7 @@ fn derives_an_account_independent_password_master_key_from_exact_raw_bytes_and_s
     let other_salt_key = PasswordBackupKey::from_password(password, [0x22; 16]).unwrap();
 
     let backup_id = BackupId::derive(&key, &account).unwrap();
-    assert_eq!(
-        key.export_for_secure_storage(),
-        same_key.export_for_secure_storage()
-    );
+    assert_eq!(key.export_raw(), same_key.export_raw());
     assert_eq!(backup_id, BackupId::derive(&same_key, &account).unwrap());
     assert_ne!(
         backup_id,
@@ -101,13 +98,10 @@ fn generates_a_fresh_salt_and_key_that_rederives_from_that_salt() {
 
     assert_ne!(first_salt, second_salt);
     assert_eq!(
-        first_key.export_for_secure_storage(),
+        first_key.export_raw(),
         PasswordBackupKey::from_password(b"password", first_salt)
             .unwrap()
-            .export_for_secure_storage(),
+            .export_raw(),
     );
-    assert_ne!(
-        first_key.export_for_secure_storage(),
-        second_key.export_for_secure_storage()
-    );
+    assert_ne!(first_key.export_raw(), second_key.export_raw());
 }

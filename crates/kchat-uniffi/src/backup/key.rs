@@ -7,7 +7,7 @@ use kchat_backup::{
 };
 use zeroize::Zeroize;
 
-use crate::BackupFfiError;
+use super::BackupFfiError;
 
 #[derive(uniffi::Enum, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackupKeyMode {

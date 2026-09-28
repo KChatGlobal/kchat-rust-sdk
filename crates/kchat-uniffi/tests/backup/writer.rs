@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kchat_mobile_sdk_rs::{
+use kchat_mobile_sdk_rs::backup::{
     BackupCiphertextSink, BackupFfiError, BackupObjectContext, BackupPlaintextSource,
     generate_mnemonic, seal_backup_object_v1,
 };

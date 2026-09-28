@@ -1,4 +1,4 @@
-use kchat_mobile_sdk_rs::{
+use kchat_mobile_sdk_rs::backup::{
     BackupDescriptorBootstrap, BackupFfiError, BackupKeyMode, generate_mnemonic, generate_password,
     import_from_raw,
 };

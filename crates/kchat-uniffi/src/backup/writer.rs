@@ -6,7 +6,7 @@ use kchat_backup::{
 };
 use zeroize::Zeroizing;
 
-use crate::{BackupFfiError, BackupObjectContext};
+use super::{BackupFfiError, BackupObjectContext};
 
 #[derive(uniffi::Record)]
 pub struct BackupObjectMetadata {

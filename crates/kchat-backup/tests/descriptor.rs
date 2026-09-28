@@ -1,7 +1,6 @@
 use kchat_backup::{
-    BackupAccountId, BackupErrorCode, BackupNamespaceId, DescriptorBackupModeV1,
-    DescriptorHeaderV1, MnemonicBackupKey, PasswordBackupKey, open_descriptor_v1,
-    seal_descriptor_v1,
+    BackupAccountId, BackupErrorCode, BackupId, DescriptorBackupModeV1, DescriptorHeaderV1,
+    MnemonicBackupKey, PasswordBackupKey, open_descriptor_v1, seal_descriptor_v1,
 };
 
 const ACCOUNT_ID: &str = "00112233-4455-6677-8899-aabbccddeeff";
@@ -19,7 +18,7 @@ fn seals_and_opens_a_unified_mnemonic_descriptor() {
     assert_eq!(serialized[8..26], [0_u8; 18]);
     assert_eq!(
         open_descriptor_v1(&key, &account, &serialized).unwrap().1,
-        BackupNamespaceId::derive(&key, &account).unwrap()
+        BackupId::derive(&key, &account).unwrap()
     );
 }
 
@@ -31,13 +30,10 @@ fn seals_and_opens_a_unified_password_descriptor() {
     let serialized =
         seal_descriptor_v1(&key, &account, DescriptorHeaderV1::password(salt)).unwrap();
 
-    let (header, namespace) = open_descriptor_v1(&key, &account, &serialized).unwrap();
+    let (header, backup_id) = open_descriptor_v1(&key, &account, &serialized).unwrap();
     assert_eq!(header.backup_mode(), DescriptorBackupModeV1::Password);
     assert_eq!(header.salt(), salt);
-    assert_eq!(
-        namespace,
-        BackupNamespaceId::derive(&key, &account).unwrap()
-    );
+    assert_eq!(backup_id, BackupId::derive(&key, &account).unwrap());
 }
 
 #[test]

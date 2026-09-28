@@ -9,9 +9,7 @@ mod limits;
 mod object;
 
 pub use account::BackupAccountId;
-pub use context::{
-    BACKUP_FORMAT_VERSION_V1, BackupChunkId, BackupNamespaceId, BackupObjectContextV1,
-};
+pub use context::{BACKUP_FORMAT_VERSION_V1, BackupChunkId, BackupId, BackupObjectContextV1};
 pub use descriptor::{
     DescriptorBackupModeV1, DescriptorHeaderV1, open_descriptor_v1, seal_descriptor_v1,
 };

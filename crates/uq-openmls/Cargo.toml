@@ -15,9 +15,9 @@ openmls = { workspace = true, features = ["fork-resolution"] }
 openmls_basic_credential = { workspace = true }
 openmls_traits = { workspace = true }
 openmls_rust_crypto = { workspace = true }
-kchat_storage_provider = { path = "../kchat-storage-provider" }
+kchat_storage_provider = { workspace = true }
 
-rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { workspace = true, features = ["bundled-sqlcipher-vendored-openssl"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

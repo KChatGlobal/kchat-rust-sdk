@@ -15,14 +15,22 @@ openmls = { workspace = true, features = ["test-utils"] }
 openmls_basic_credential = { workspace = true }
 openmls_traits = { workspace = true }
 openmls_rust_crypto = { workspace = true }
-uq-openmls = { path = "../uq-openmls" }
-kchat_storage_provider = { path = "../kchat-storage-provider" }
+uq-openmls = { workspace = true }
+kchat_storage_provider = { workspace = true }
 
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { workspace = true, features = ["bundled"] }
 thiserror = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+bip39 = { version = "=3.0.0", features = ["zeroize"] }
+ed25519-dalek = { version = "=3.0.0", features = ["zeroize"] }
+p256 = { version = "=0.14.0", features = ["ecdsa"] }
+getrandom = "0.4.3"
+hkdf = "0.13"
+sha2 = "0.11"
+uuid = "=1.26.0"
+zeroize = { workspace = true, features = ["derive"] }
 
 [features]
 extensions-draft = [

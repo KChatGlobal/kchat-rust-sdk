@@ -24,15 +24,16 @@ openmls_basic_credential = { workspace = true }
 openmls_traits = { workspace = true }
 openmls_rust_crypto = { workspace = true }
 
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { workspace = true, features = ["bundled"] }
 tokio = { version = "1", features = ["full"] }
 uniffi = { version = "0.31", features = ["cli", "tokio"] }
-uq-openmls = { path = "../uq-openmls" }
-kchat-mls = {path = "../kchat-mls" }
-kchat_storage_provider = { path = "../kchat-storage-provider" }
+uq-openmls = { workspace = true }
+kchat-mls = { workspace = true }
+kchat_storage_provider = { workspace = true }
 thiserror = { workspace = true }
 secrecy = { workspace = true }
 sha2 = "0.10"
+zeroize = { workspace = true }
 
 [dev-dependencies]
 uniffi = { version = "0.31", features = ["bindgen-tests"] }

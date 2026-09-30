@@ -12,11 +12,11 @@ categories.workspace = true
 
 [dependencies]
 openmls_traits = { workspace = true }
-thiserror = "2.0"
+thiserror = { workspace = true }
 serde = { workspace = true }
 log = { version = "0.4" }
 r2d2 = "0.8"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { workspace = true, features = ["bundled"] }
 refinery = { version = "0.9", features = ["rusqlite", "enums"] }
 
 [features]

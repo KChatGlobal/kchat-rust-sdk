@@ -24,6 +24,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 secrecy = "0.10.3"
+rusqlite = "0.37"
+zeroize = "1.9"
+kchat-mls = { path = "crates/kchat-mls" }
+kchat_storage_provider = { path = "crates/kchat-storage-provider" }
+uq-openmls = { path = "crates/uq-openmls" }
 
 openmls = { version = "0.9.0" }
 openmls_basic_credential = { version = "0.6.0" }

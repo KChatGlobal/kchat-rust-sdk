@@ -1,4 +1,5 @@
-use std::fmt;
+pub mod mnemonic;
+
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
@@ -165,8 +166,8 @@ pub enum CustomProposalType {
     Remove,
 }
 
-impl fmt::Display for CustomProposalType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for CustomProposalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = match self {
             CustomProposalType::ReAdd => "ReAdd",
             CustomProposalType::Remove => "Remove",

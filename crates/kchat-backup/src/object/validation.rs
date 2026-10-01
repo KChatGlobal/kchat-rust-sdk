@@ -1,7 +1,7 @@
 //! Full-object envelope, integrity and bounded decompression validation.
 //! Payload bytes are opaque; schema validation belongs to the application.
 
-use super::reader::{ReplayProof, validate_payload_v1};
+use super::reader::validate_payload_v1;
 use crate::{
     BackupByteSourceFactory, BackupError, BackupErrorCode, BackupObjectContextV1,
     ExpectedBackupObjectV1,
@@ -60,16 +60,6 @@ impl BackupObjectValidatorV1 {
         factory: &mut dyn BackupByteSourceFactory,
         expected: &ExpectedBackupObjectV1,
     ) -> Result<(), BackupError> {
-        self.validate_with_proof(context, factory, expected)
-            .map(|_| ())
-    }
-
-    pub(super) fn validate_with_proof(
-        &mut self,
-        context: &BackupObjectContextV1,
-        factory: &mut dyn BackupByteSourceFactory,
-        expected: &ExpectedBackupObjectV1,
-    ) -> Result<ReplayProof, BackupError> {
         if self.state != BackupValidationState::Ready {
             return Err(BackupError::invalid_state());
         }

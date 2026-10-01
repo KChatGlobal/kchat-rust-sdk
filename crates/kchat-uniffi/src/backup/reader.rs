@@ -1,8 +1,8 @@
 //! Bounded Kotlin/Swift callbacks for the verified backup reader.
 //!
 //! Each factory open must return a fresh handle at offset zero for the same
-//! committed ciphertext object. The core reads it three times before and during
-//! plaintext release. Callback failures are sanitized to `IoError`.
+//! committed ciphertext object. The core reads it twice, decrypting/decompressing
+//! once into provisional staging. Callback failures are sanitized to `IoError`.
 
 use std::sync::{
     Arc,
@@ -35,10 +35,10 @@ pub trait BackupCiphertextSource: Send + Sync {
     fn release_stream(&self) -> Result<(), BackupFfiError>;
 }
 
-/// Receives opaque plaintext after envelope, integrity and compression checks.
+/// Receives provisional opaque plaintext from AEAD-authenticated frames.
+/// Final integrity/decompression checks can fail after output has started;
+/// callers must discard staging on any error and activate only after full restore.
 /// Schema validation is outside the SDK.
-/// Output may contain a prefix if I/O/cancellation fails during replay; callers
-/// must discard staging on error and activate it only after full restore.
 #[uniffi::export(with_foreign)]
 pub trait BackupPlaintextSink: Send + Sync {
     fn write_chunk(&self, bytes: Vec<u8>) -> Result<(), BackupFfiError>;

@@ -155,8 +155,8 @@ fn encrypt_upload_download_verify_and_decrypt_json() {
     let mut restore_sink = MemorySink::default();
     open_object_v1(&restore_context, &mut server, &expected, &mut restore_sink).unwrap();
 
-    // The reader opens the object three times: size/hash preflight, full validation,
-    // and plaintext output.
-    assert_eq!(server.opens, 3);
+    // The reader opens twice: size/hash preflight, then verification and output
+    // with one decryption/decompression pass.
+    assert_eq!(server.opens, 2);
     assert_eq!(restore_sink.0, JSON);
 }

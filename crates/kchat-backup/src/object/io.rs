@@ -15,10 +15,10 @@ pub trait BackupByteSource {
 ///
 /// The caller owns storage/network policy. Every opened source must refer to the
 /// same immutable storage version, not a mutable "latest" URL. The reader also
-/// rechecks size/hash on subsequent passes. The output pass additionally checks
-/// each encrypted frame against a private digest recorded during full validation
-/// before it can produce plaintext. A changed stream can still interrupt output;
-/// callers must not activate a partial restore.
+/// checks size/hash before decryption, then rechecks them at the end of the second
+/// pass. Decryption and decompression run once, during that second pass. Output
+/// is provisional until the entire call succeeds: a changed stream or a late
+/// validation failure can leave bytes in the sink. Discard staging on any error.
 ///
 /// Sources own their callback/file handles and release them on drop. No seek,
 /// file path, HTTP client or async runtime is imposed by the core. Callbacks are

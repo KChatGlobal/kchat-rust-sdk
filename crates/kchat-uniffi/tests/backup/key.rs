@@ -1,6 +1,6 @@
 use kchat_mobile_sdk_rs::backup::{
     BackupDescriptorBootstrap, BackupFfiError, BackupKeyMode, generate_mnemonic, generate_password,
-    import_from_raw,
+    import_from_raw, restore_from_mnemonic,
 };
 
 const ACCOUNT: &str = "00112233-4455-6677-8899-aabbccddeeff";
@@ -27,6 +27,27 @@ fn generates_a_mnemonic_with_the_requested_word_count() {
             imported.derive_backup_id(ACCOUNT.to_owned()).unwrap(),
         );
     }
+}
+
+#[test]
+fn restores_the_same_master_key_from_a_mnemonic_phrase() {
+    let generated = generate_mnemonic(12).unwrap();
+    let restored = restore_from_mnemonic(generated.mnemonic.clone()).unwrap();
+
+    assert_eq!(restored.mode(), BackupKeyMode::Mnemonic);
+    assert_eq!(restored.export_raw(), generated.key.export_raw());
+    assert_eq!(
+        restored.derive_backup_id(ACCOUNT.to_owned()).unwrap(),
+        generated.key.derive_backup_id(ACCOUNT.to_owned()).unwrap(),
+    );
+}
+
+#[test]
+fn rejects_an_invalid_mnemonic_phrase() {
+    assert!(matches!(
+        restore_from_mnemonic("not a valid recovery phrase".to_owned()),
+        Err(BackupFfiError::InvalidMnemonic)
+    ));
 }
 
 #[test]

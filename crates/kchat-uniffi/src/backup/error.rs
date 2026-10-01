@@ -34,8 +34,6 @@ pub enum BackupFfiError {
     NotImplemented,
     #[error("backup operation failed: invalid compressed data")]
     InvalidCompressedData,
-    #[error("backup operation failed: invalid payload")]
-    InvalidPayload,
 }
 
 impl From<BackupError> for BackupFfiError {
@@ -57,7 +55,6 @@ impl From<BackupError> for BackupFfiError {
             BackupErrorCode::MalformedObject => Self::MalformedObject,
             BackupErrorCode::NotImplemented => Self::NotImplemented,
             BackupErrorCode::InvalidCompressedData => Self::InvalidCompressedData,
-            BackupErrorCode::InvalidPayload => Self::InvalidPayload,
         }
     }
 }

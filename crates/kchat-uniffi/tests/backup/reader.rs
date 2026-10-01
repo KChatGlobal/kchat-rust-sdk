@@ -128,8 +128,8 @@ fn kotlin_style_callbacks_seal_and_open_the_same_json() {
 
     open_backup_object_v1(context, factory.clone(), metadata, plaintext_sink.clone()).unwrap();
 
-    assert_eq!(factory.opens.load(Ordering::Relaxed), 3);
-    assert_eq!(factory.closes.load(Ordering::Relaxed), 3);
+    assert_eq!(factory.opens.load(Ordering::Relaxed), 2);
+    assert_eq!(factory.closes.load(Ordering::Relaxed), 2);
     assert_eq!(*plaintext_sink.0.lock().unwrap(), JSON);
 }
 

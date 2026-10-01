@@ -42,7 +42,7 @@ impl BoundedDecoder {
         })
     }
 
-    /// `emit` discards bytes during verification or writes them during replay.
+    /// `emit` discards bytes during validation or writes them during streaming open.
     /// It must consume the borrowed slice synchronously. Cancellation
     /// is checked on every decoder iteration, even for highly compressible input.
     pub(super) fn push(

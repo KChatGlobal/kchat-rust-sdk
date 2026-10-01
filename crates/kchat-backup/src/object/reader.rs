@@ -1,6 +1,6 @@
 //! KCBK V1 reader with bounded Zstd and opaque payloads.
-//! Full validation precedes output. A private, bounded frame-digest proof guards
-//! the output replay BEFORE each frame reaches the decoder, not merely at EOF.
+//! A ciphertext preflight precedes one decryption/decompression pass. Output is
+//! provisional until the final integrity and decompression checks succeed.
 
 use aead_stream::{DecryptorBE32, Key, Nonce, StreamBE32, aead::Payload};
 use chacha20poly1305::XChaCha20Poly1305;
@@ -9,9 +9,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupError, BackupErrorCode,
-    BackupObjectContextV1, BackupObjectDescriptor, BackupObjectValidatorV1,
-    MAX_CIPHERTEXT_OBJECT_BYTES_V1, MAX_COMPRESSED_OBJECT_BYTES_V1,
-    MAX_ENCRYPTED_BLOCKS_PER_OBJECT_V1, MAX_IO_CHUNK_BYTES_V1,
+    BackupObjectContextV1, BackupObjectDescriptor, MAX_CIPHERTEXT_OBJECT_BYTES_V1,
+    MAX_COMPRESSED_OBJECT_BYTES_V1, MAX_ENCRYPTED_BLOCKS_PER_OBJECT_V1, MAX_IO_CHUNK_BYTES_V1,
 };
 
 use super::compression::BoundedDecoder;
@@ -77,34 +76,30 @@ pub fn verify_object_envelope_v1(
 ) -> Result<(), BackupError> {
     preflight(factory, expected)?;
     let mut input = CheckedSource::open(factory, expected)?;
-    authenticate_envelope(context, &mut input, &mut ProofMode::Ignore, &mut |_, _| {
-        Ok(())
-    })?;
+    authenticate_envelope(context, &mut input, &mut |_, _| Ok(()))?;
     input.finish()
 }
 
-/// Verify the envelope, integrity and bounded decompression, then replay opaque
-/// plaintext to `sink`. No payload schema is interpreted or validated.
-/// Requires three opens: ciphertext preflight, full verification, output.
-/// Each replay frame is checked against a private digest before decoding it.
+/// Preflight ciphertext integrity, then decrypt/decompress opaque plaintext into
+/// `sink` in one pass. No payload schema is interpreted or validated.
+/// Requires two opens: ciphertext preflight, then streaming verification/output.
+/// Each frame must pass AEAD authentication before decompression and output.
 ///
-/// Sink/I/O failure or cancellation during replay may leave a prefix of VALIDATED
-/// plaintext in the sink. This is not an atomic import API. Use a fresh staging
-/// store and activate it only after this function and the whole restore succeed.
+/// Output is provisional until this function returns `Ok(())`: a changed source,
+/// late authentication/decompression/integrity error, I/O failure or cancellation
+/// can leave bytes in the sink, including bytes from a different valid object.
+/// Write to fresh staging, discard it on any error, and activate it only after
+/// this function and the whole restore succeed. Writes are not atomic.
 pub fn open_object_v1(
     context: &BackupObjectContextV1,
     factory: &mut dyn BackupByteSourceFactory,
     expected: &ExpectedBackupObjectV1,
     sink: &mut dyn BackupByteSink,
 ) -> Result<(), BackupError> {
-    let proof = BackupObjectValidatorV1::new().validate_with_proof(context, factory, expected)?;
-    process_payload(
-        context,
-        factory,
-        expected,
-        &mut ProofMode::Check(&proof),
-        &mut |bytes| sink.write_chunk(bytes),
-    )
+    preflight(factory, expected)?;
+    process_payload(context, factory, expected, &mut |bytes| {
+        sink.write_chunk(bytes)
+    })
 }
 
 fn preflight(
@@ -117,85 +112,25 @@ fn preflight(
     input.finish()
 }
 
-/// Only a successful full validation may hand this to the output pass. No public
-/// constructor/token API: proof, context and inventory stay within one operation.
-/// At most 4,096 SHA-256 digests (128 KiB) plus the exact 29-byte header are held.
-pub(super) struct ReplayProof {
-    header: [u8; ENVELOPE_HEADER_BYTES],
-    frames: Vec<[u8; 32]>,
-}
-
-enum ProofMode<'a> {
-    Ignore,
-    Record(&'a mut ReplayProof),
-    Check(&'a ReplayProof),
-}
-impl ProofMode<'_> {
-    fn header(&mut self, header: &[u8; ENVELOPE_HEADER_BYTES]) -> Result<(), BackupError> {
-        match self {
-            Self::Record(proof) => proof.header = *header,
-            Self::Check(proof) if &proof.header != header => {
-                return Err(BackupError::from_code(BackupErrorCode::IntegrityMismatch));
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    fn frame(&mut self, index: usize, bytes: &[u8], final_block: bool) -> Result<(), BackupError> {
-        if matches!(self, Self::Ignore) {
-            return Ok(());
-        }
-        let mut hash = Sha256::new();
-        hash.update((bytes.len() as u32).to_be_bytes());
-        hash.update(bytes);
-        hash.update([u8::from(final_block)]);
-        let digest: [u8; 32] = hash.finalize().into();
-        match self {
-            Self::Record(proof) => proof.frames.push(digest),
-            Self::Check(proof) => {
-                if proof.frames.get(index) != Some(&digest)
-                    || (final_block && index + 1 != proof.frames.len())
-                {
-                    return Err(BackupError::from_code(BackupErrorCode::IntegrityMismatch));
-                }
-            }
-            Self::Ignore => {}
-        }
-        Ok(())
-    }
-}
-
 pub(super) fn validate_payload_v1(
     context: &BackupObjectContextV1,
     factory: &mut dyn BackupByteSourceFactory,
     expected: &ExpectedBackupObjectV1,
-) -> Result<ReplayProof, BackupError> {
+) -> Result<(), BackupError> {
     preflight(factory, expected)?;
-    let mut proof = ReplayProof {
-        header: [0; ENVELOPE_HEADER_BYTES],
-        frames: Vec::with_capacity(MAX_ENCRYPTED_BLOCKS_PER_OBJECT_V1 as usize),
-    };
-    process_payload(
-        context,
-        factory,
-        expected,
-        &mut ProofMode::Record(&mut proof),
-        &mut |_| Ok(()),
-    )?;
-    check_factory_cancelled(factory)?;
-    Ok(proof)
+    process_payload(context, factory, expected, &mut |_| Ok(()))?;
+    check_factory_cancelled(factory)
 }
 
 fn process_payload(
     context: &BackupObjectContextV1,
     factory: &mut dyn BackupByteSourceFactory,
     expected: &ExpectedBackupObjectV1,
-    proof: &mut ProofMode<'_>,
     emit: &mut dyn FnMut(&[u8]) -> Result<(), BackupError>,
 ) -> Result<(), BackupError> {
     let mut input = CheckedSource::open(factory, expected)?;
     let mut decoder = BoundedDecoder::new()?;
-    authenticate_envelope(context, &mut input, proof, &mut |bytes, cancelled| {
+    authenticate_envelope(context, &mut input, &mut |bytes, cancelled| {
         decoder.push(bytes, emit, cancelled)
     })?;
     input.finish()?;
@@ -321,12 +256,10 @@ type CompressedConsumer<'a> =
 fn authenticate_envelope(
     context: &BackupObjectContextV1,
     input: &mut CheckedSource<'_>,
-    proof: &mut ProofMode<'_>,
     consume: &mut CompressedConsumer<'_>,
 ) -> Result<(), BackupError> {
     let mut header = [0; ENVELOPE_HEADER_BYTES];
     input.read_exact(&mut header)?;
-    proof.header(&header)?;
     let prefix = parse_header(&header)?;
     let mut key = Key::<XChaCha20Poly1305>::try_from(context.object_key().as_slice())
         .map_err(|_| BackupError::invalid_state())?;
@@ -351,9 +284,6 @@ fn authenticate_envelope(
         }
         input.read_exact(&mut frame[..length])?;
         let next = input.next_length()?;
-        // Check before decryption/decoding on output replay. Include FINAL in the
-        // digest so a shortened/extended stream cannot masquerade as the original.
-        proof.frame((blocks - 1) as usize, &frame[..length], next.is_none())?;
         // NEXT/FINAL is implicit in the STREAM nonce. EOF only identifies a
         // final CANDIDATE; decrypt_last must authenticate the final flag as well.
         // Cutting at a NEXT boundary or appending after FINAL fails authentication.
@@ -398,7 +328,9 @@ fn count_compressed(total: &mut u64, added: usize) -> Result<(), BackupError> {
 mod tests {
     use super::super::envelope::serialize_header;
     use super::*;
-    use crate::{BackupAccountId, BackupChunkId, BackupId, MnemonicBackupKey};
+    use crate::{
+        BackupAccountId, BackupChunkId, BackupId, BackupObjectValidatorV1, MnemonicBackupKey,
+    };
     use aead_stream::EncryptorBE32;
 
     struct Source(std::io::Cursor<Vec<u8>>);
@@ -474,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_invalid_compression_never_reaches_output() {
+    fn authenticated_invalid_compression_fails_even_if_output_has_started() {
         // Generate valid AEAD around deliberately invalid compression. Merely
         // flipping ciphertext would only exercise AEAD, not the decoder boundary.
         use std::io::Write;
@@ -511,10 +443,12 @@ mod tests {
             vec![0x28, 0xb5, 0x2f, 0xfd, 1, 0, 1],
             vec![0x28, 0xb5, 0x2f, 0xfd, 0, 14 << 3],
         ];
-        struct NoOutput;
-        impl BackupByteSink for NoOutput {
-            fn write_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
-                panic!("unvalidated output")
+        #[derive(Default)]
+        struct Staging(Vec<u8>);
+        impl BackupByteSink for Staging {
+            fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), BackupError> {
+                self.0.extend_from_slice(bytes);
+                Ok(())
             }
         }
         for (index, compressed) in cases.iter().enumerate() {
@@ -537,12 +471,26 @@ mod tests {
                     .unwrap();
             let mut factory = Factory(bytes);
             verify_object_envelope_v1(&context, &mut factory, &expected).unwrap();
+            let mut staging = Staging::default();
             let error =
-                open_object_v1(&context, &mut factory, &expected, &mut NoOutput).unwrap_err();
+                open_object_v1(&context, &mut factory, &expected, &mut staging).unwrap_err();
             assert!(matches!(
                 error.code(),
                 BackupErrorCode::InvalidCompressedData | BackupErrorCode::ResourceLimitExceeded
             ));
+            assert!(b"some plaintext".starts_with(&staging.0));
+            if index == 3 || index == 4 {
+                // Trailing/concatenated data is detected after the valid first
+                // Zstd frame has produced output. Even a full output is provisional.
+                assert_eq!(staging.0, b"some plaintext");
+            }
+            assert_eq!(
+                BackupObjectValidatorV1::new()
+                    .validate(&context, &mut factory, &expected)
+                    .unwrap_err()
+                    .code(),
+                error.code()
+            );
         }
     }
 }

@@ -22,7 +22,6 @@ pub use limits::{
 };
 pub use object::{
     BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupObjectDescriptor,
-    BackupObjectValidatorV1, BackupObjectWriterV1, BackupPayloadValidator, BackupValidationState,
-    ExpectedBackupObjectV1, copy_opaque_bytes_v1, open_object_v1, seal_object_v1,
-    verify_object_envelope_v1,
+    BackupObjectValidatorV1, BackupObjectWriterV1, BackupValidationState, ExpectedBackupObjectV1,
+    copy_opaque_bytes_v1, open_object_v1, seal_object_v1, verify_object_envelope_v1,
 };

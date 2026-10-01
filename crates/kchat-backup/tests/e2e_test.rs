@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use kchat_backup::{
     BackupAccountId, BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupChunkId,
-    BackupError, BackupErrorCode, BackupId, BackupObjectContextV1, BackupPayloadValidator,
-    DescriptorBackupModeV1, DescriptorHeaderV1, ExpectedBackupObjectV1, MnemonicBackupKey,
-    open_descriptor_v1, open_object_v1, seal_descriptor_v1, seal_object_v1,
+    BackupError, BackupId, BackupObjectContextV1, DescriptorBackupModeV1, DescriptorHeaderV1,
+    ExpectedBackupObjectV1, MnemonicBackupKey, open_descriptor_v1, open_object_v1,
+    seal_descriptor_v1, seal_object_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -73,35 +73,6 @@ impl BackupByteSourceFactory for StoredChunk {
             bytes: Arc::clone(&self.ciphertext),
             offset: 0,
         }))
-    }
-}
-
-// This test validator accepts only the exact JSON fixture. A real application must
-// validate records against its schema and resource limits; the SDK defines no JSON schema.
-struct ExactJsonFixtureValidator {
-    offset: usize,
-    finished: bool,
-}
-
-impl BackupPayloadValidator for ExactJsonFixtureValidator {
-    fn validate_chunk(&mut self, bytes: &[u8]) -> Result<(), BackupError> {
-        let end = self
-            .offset
-            .checked_add(bytes.len())
-            .ok_or_else(|| BackupError::from_code(BackupErrorCode::InvalidPayload))?;
-        if JSON.get(self.offset..end) != Some(bytes) {
-            return Err(BackupError::from_code(BackupErrorCode::InvalidPayload));
-        }
-        self.offset = end;
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<(), BackupError> {
-        if self.offset != JSON.len() {
-            return Err(BackupError::from_code(BackupErrorCode::InvalidPayload));
-        }
-        self.finished = true;
-        Ok(())
     }
 }
 
@@ -181,23 +152,11 @@ fn encrypt_upload_download_verify_and_decrypt_json() {
         server.format_version,
     )
     .unwrap();
-    let mut validator = ExactJsonFixtureValidator {
-        offset: 0,
-        finished: false,
-    };
     let mut restore_sink = MemorySink::default();
-    open_object_v1(
-        &restore_context,
-        &mut server,
-        &expected,
-        &mut validator,
-        &mut restore_sink,
-    )
-    .unwrap();
+    open_object_v1(&restore_context, &mut server, &expected, &mut restore_sink).unwrap();
 
     // The reader opens the object three times: size/hash preflight, full validation,
     // and plaintext output.
     assert_eq!(server.opens, 3);
-    assert!(validator.finished);
     assert_eq!(restore_sink.0, JSON);
 }

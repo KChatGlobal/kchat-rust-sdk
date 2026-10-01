@@ -5,8 +5,8 @@ use std::sync::{
 
 use kchat_mobile_sdk_rs::backup::{
     BackupCiphertextSink, BackupCiphertextSource, BackupCiphertextSourceFactory, BackupFfiError,
-    BackupObjectContext, BackupPayloadValidator, BackupPlaintextSink, BackupPlaintextSource,
-    generate_mnemonic, open_backup_object_v1, seal_backup_object_v1,
+    BackupObjectContext, BackupPlaintextSink, BackupPlaintextSource, generate_mnemonic,
+    open_backup_object_v1, seal_backup_object_v1,
 };
 
 const ACCOUNT: &str = "00112233-4455-6677-8899-aabbccddeeff";
@@ -92,44 +92,6 @@ impl BackupCiphertextSourceFactory for SourceFactory {
     }
 }
 
-struct ExactValidator {
-    expected: Vec<u8>,
-    seen: Mutex<Vec<u8>>,
-    finishes: AtomicUsize,
-}
-
-impl ExactValidator {
-    fn new(expected: &[u8]) -> Self {
-        Self {
-            expected: expected.to_vec(),
-            seen: Mutex::new(Vec::new()),
-            finishes: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl BackupPayloadValidator for ExactValidator {
-    fn validate_chunk(&self, bytes: Vec<u8>) -> Result<(), BackupFfiError> {
-        let mut seen = self.seen.lock().unwrap();
-        if seen.len() + bytes.len() > self.expected.len()
-            || self.expected[seen.len()..seen.len() + bytes.len()] != bytes
-        {
-            return Err(BackupFfiError::InvalidPayload);
-        }
-        seen.extend(bytes);
-        Ok(())
-    }
-
-    fn finish(&self) -> Result<(), BackupFfiError> {
-        self.finishes.fetch_add(1, Ordering::Relaxed);
-        if *self.seen.lock().unwrap() == self.expected {
-            Ok(())
-        } else {
-            Err(BackupFfiError::InvalidPayload)
-        }
-    }
-}
-
 #[derive(Default)]
 struct PlaintextSink(Mutex<Vec<u8>>);
 
@@ -162,21 +124,12 @@ fn kotlin_style_callbacks_seal_and_open_the_same_json() {
     let factory = Arc::new(SourceFactory::new(
         ciphertext_sink.0.lock().unwrap().clone(),
     ));
-    let validator = Arc::new(ExactValidator::new(JSON));
     let plaintext_sink = Arc::new(PlaintextSink::default());
 
-    open_backup_object_v1(
-        context,
-        factory.clone(),
-        metadata,
-        validator.clone(),
-        plaintext_sink.clone(),
-    )
-    .unwrap();
+    open_backup_object_v1(context, factory.clone(), metadata, plaintext_sink.clone()).unwrap();
 
     assert_eq!(factory.opens.load(Ordering::Relaxed), 3);
     assert_eq!(factory.closes.load(Ordering::Relaxed), 3);
-    assert_eq!(validator.finishes.load(Ordering::Relaxed), 1);
     assert_eq!(*plaintext_sink.0.lock().unwrap(), JSON);
 }
 
@@ -197,47 +150,11 @@ fn inventory_mismatch_prevents_plaintext_callback() {
     let plaintext_sink = Arc::new(PlaintextSink::default());
 
     assert!(matches!(
-        open_backup_object_v1(
-            context,
-            factory.clone(),
-            metadata,
-            Arc::new(ExactValidator::new(JSON)),
-            plaintext_sink.clone(),
-        ),
+        open_backup_object_v1(context, factory.clone(), metadata, plaintext_sink.clone(),),
         Err(BackupFfiError::IntegrityMismatch)
     ));
     assert_eq!(factory.opens.load(Ordering::Relaxed), 1);
     assert_eq!(factory.closes.load(Ordering::Relaxed), 1);
-    assert!(plaintext_sink.0.lock().unwrap().is_empty());
-}
-
-#[test]
-fn semantic_rejection_prevents_plaintext_callback() {
-    let context = context();
-    let ciphertext_sink = Arc::new(CiphertextSink::default());
-    let metadata = seal_backup_object_v1(
-        Arc::clone(&context),
-        Arc::new(PlaintextSource(Mutex::new(Some(JSON.to_vec())))),
-        ciphertext_sink.clone(),
-    )
-    .unwrap();
-    let factory = Arc::new(SourceFactory::new(
-        ciphertext_sink.0.lock().unwrap().clone(),
-    ));
-    let plaintext_sink = Arc::new(PlaintextSink::default());
-
-    assert!(matches!(
-        open_backup_object_v1(
-            context,
-            factory.clone(),
-            metadata,
-            Arc::new(ExactValidator::new(b"a different record")),
-            plaintext_sink.clone(),
-        ),
-        Err(BackupFfiError::InvalidPayload)
-    ));
-    assert_eq!(factory.opens.load(Ordering::Relaxed), 2);
-    assert_eq!(factory.closes.load(Ordering::Relaxed), 2);
     assert!(plaintext_sink.0.lock().unwrap().is_empty());
 }
 
@@ -270,7 +187,6 @@ fn failed_cancellation_callback_is_sanitized_to_io_error() {
             context,
             Arc::new(FailedCancellationCallback),
             metadata,
-            Arc::new(ExactValidator::new(JSON)),
             plaintext_sink.clone(),
         ),
         Err(BackupFfiError::IoError)

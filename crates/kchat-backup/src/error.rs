@@ -22,8 +22,6 @@ pub enum BackupErrorCode {
     NotImplemented,
     /// Invalid, truncated or unsupported Zstd payload in an authenticated object.
     InvalidCompressedData,
-    /// Caller-supplied payload validator rejected the records or their completion.
-    InvalidPayload,
 }
 
 #[derive(Debug, Error)]

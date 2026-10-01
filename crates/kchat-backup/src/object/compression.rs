@@ -42,8 +42,8 @@ impl BoundedDecoder {
         })
     }
 
-    /// `emit` belongs to a trusted validator, or to the output pass AFTER full
-    /// validation. It must consume the borrowed slice synchronously. Cancellation
+    /// `emit` discards bytes during verification or writes them during replay.
+    /// It must consume the borrowed slice synchronously. Cancellation
     /// is checked on every decoder iteration, even for highly compressible input.
     pub(super) fn push(
         &mut self,

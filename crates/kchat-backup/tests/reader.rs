@@ -9,7 +9,6 @@ use std::{
     },
 };
 
-use kchat_backup::BackupPayloadValidator;
 use kchat_backup::{
     BackupAccountId, BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupChunkId,
     BackupError, BackupErrorCode, BackupId, BackupObjectContextV1, BackupObjectValidatorV1,
@@ -18,52 +17,6 @@ use kchat_backup::{
     verify_object_envelope_v1,
 };
 use sha2::{Digest, Sha256};
-
-struct RejectPayload;
-impl BackupPayloadValidator for RejectPayload {
-    fn validate_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
-        Err(BackupError::from_code(BackupErrorCode::InvalidPayload))
-    }
-    fn finish(&mut self) -> Result<(), BackupError> {
-        Err(BackupError::from_code(BackupErrorCode::InvalidPayload))
-    }
-}
-
-/// Exact comparison is a test policy, not a production schema. It also verifies
-/// callbacks preserve bytes across arbitrary decoder output boundaries.
-struct ExactPayload<'a> {
-    expected: &'a [u8],
-    offset: usize,
-    finished: bool,
-}
-impl<'a> ExactPayload<'a> {
-    fn new(expected: &'a [u8]) -> Self {
-        Self {
-            expected,
-            offset: 0,
-            finished: false,
-        }
-    }
-}
-impl BackupPayloadValidator for ExactPayload<'_> {
-    fn validate_chunk(&mut self, bytes: &[u8]) -> Result<(), BackupError> {
-        assert!(bytes.len() <= MAX_IO_CHUNK_BYTES_V1);
-        if self.expected.get(self.offset..self.offset + bytes.len()) != Some(bytes) {
-            return Err(BackupError::from_code(BackupErrorCode::InvalidPayload));
-        }
-        self.offset += bytes.len();
-        Ok(())
-    }
-    fn finish(&mut self) -> Result<(), BackupError> {
-        assert!(!self.finished);
-        self.finished = true;
-        if self.offset == self.expected.len() {
-            Ok(())
-        } else {
-            Err(BackupError::from_code(BackupErrorCode::InvalidPayload))
-        }
-    }
-}
 
 fn context(account: &str, key: u8, chunk: u8) -> BackupObjectContextV1 {
     let master = MnemonicBackupKey::import_from_raw(&[key; 32]).unwrap();
@@ -377,29 +330,20 @@ fn rechecks_reopened_object_even_when_both_versions_have_valid_aead() {
 }
 
 #[test]
-fn semantic_rejection_is_terminal_and_never_releases_plaintext() {
-    let bytes = seal(b"sensitive plaintext");
+fn integrity_failure_is_terminal_and_never_releases_plaintext() {
+    let mut bytes = seal(b"sensitive plaintext");
+    bytes[33] ^= 1;
     let mut validator = BackupObjectValidatorV1::new();
     let mut factory = Factory::new(&bytes);
     assert_eq!(validator.state(), BackupValidationState::Ready);
     let error = validator
-        .validate(
-            &context(ACCOUNT, 3, 7),
-            &mut factory,
-            &expected(&bytes),
-            &mut RejectPayload,
-        )
+        .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
         .unwrap_err();
-    assert_eq!(error.code(), BackupErrorCode::InvalidPayload);
+    assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
     assert_eq!(validator.state(), BackupValidationState::Failed);
     assert_eq!(
         validator
-            .validate(
-                &context(ACCOUNT, 3, 7),
-                &mut factory,
-                &expected(&bytes),
-                &mut RejectPayload
-            )
+            .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
             .unwrap_err()
             .code(),
         BackupErrorCode::InvalidState
@@ -414,11 +358,10 @@ fn semantic_rejection_is_terminal_and_never_releases_plaintext() {
         &context(ACCOUNT, 3, 7),
         &mut Factory::new(&bytes),
         &expected(&bytes),
-        &mut RejectPayload,
         &mut sink,
     )
     .unwrap_err();
-    assert_eq!(error.code(), BackupErrorCode::InvalidPayload);
+    assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
     assert!(sink.0.is_empty());
 }
 
@@ -431,12 +374,7 @@ fn cancellation_is_terminal_and_releases_open_sources() {
         factory.cancel_on_read = !before_open;
         let mut validator = BackupObjectValidatorV1::new();
         let error = validator
-            .validate(
-                &context(ACCOUNT, 3, 7),
-                &mut factory,
-                &expected(&bytes),
-                &mut RejectPayload,
-            )
+            .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
             .unwrap_err();
         assert_eq!(error.code(), BackupErrorCode::Cancelled);
         assert_eq!(validator.state(), BackupValidationState::Cancelled);
@@ -448,12 +386,7 @@ fn cancellation_is_terminal_and_releases_open_sources() {
     let mut factory = Factory::new(&bytes);
     assert_eq!(
         validator
-            .validate(
-                &context(ACCOUNT, 3, 7),
-                &mut factory,
-                &expected(&bytes),
-                &mut RejectPayload
-            )
+            .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
             .unwrap_err()
             .code(),
         BackupErrorCode::InvalidState
@@ -513,7 +446,6 @@ fn handles_callback_faults_without_panicking_or_exposing_plaintext() {
             &context(ACCOUNT, 3, 7),
             &mut FaultyFactory(bad_count),
             &expected(&bytes),
-            &mut RejectPayload,
             &mut sink,
         )
         .unwrap_err();
@@ -570,7 +502,7 @@ fn rejects_each_truncation_point_of_a_small_object() {
 }
 
 #[test]
-fn opens_writer_objects_only_after_semantic_completion() {
+fn opens_opaque_writer_objects_without_schema_validation() {
     for plaintext in [
         vec![],
         b"opaque payload".to_vec(),
@@ -578,7 +510,6 @@ fn opens_writer_objects_only_after_semantic_completion() {
         vec![42; 300_000],
     ] {
         let bytes = seal(&plaintext);
-        let mut semantics = ExactPayload::new(&plaintext);
         let mut factory = Factory::new(&bytes);
         factory.max_read = 11;
         let mut sink = Sink::default();
@@ -586,11 +517,9 @@ fn opens_writer_objects_only_after_semantic_completion() {
             &context(ACCOUNT, 3, 7),
             &mut factory,
             &expected(&bytes),
-            &mut semantics,
             &mut sink,
         )
         .unwrap();
-        assert!(semantics.finished);
         assert_eq!(sink.0, plaintext);
         assert_eq!(factory.opens, 3);
         assert_eq!(factory.dropped.load(Ordering::Relaxed), 3);
@@ -601,54 +530,19 @@ fn opens_writer_objects_only_after_semantic_completion() {
 fn validator_completes_once_without_opening_an_output_pass() {
     let bytes = seal(b"payload");
     let mut factory = Factory::new(&bytes);
-    let mut semantics = ExactPayload::new(b"payload");
     let mut validator = BackupObjectValidatorV1::new();
     validator
-        .validate(
-            &context(ACCOUNT, 3, 7),
-            &mut factory,
-            &expected(&bytes),
-            &mut semantics,
-        )
+        .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
         .unwrap();
     assert_eq!(validator.state(), BackupValidationState::Completed);
-    assert!(semantics.finished);
     assert_eq!(factory.opens, 2);
     assert_eq!(
         validator
-            .validate(
-                &context(ACCOUNT, 3, 7),
-                &mut factory,
-                &expected(&bytes),
-                &mut semantics
-            )
+            .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
             .unwrap_err()
             .code(),
         BackupErrorCode::InvalidState
     );
-}
-
-#[test]
-fn rejects_incomplete_semantics_at_eof_before_any_output() {
-    let bytes = seal(b"prefix");
-    let mut semantics = ExactPayload::new(b"prefix plus required footer");
-    let mut factory = Factory::new(&bytes);
-    let mut sink = Sink::default();
-    assert_eq!(
-        open_object_v1(
-            &context(ACCOUNT, 3, 7),
-            &mut factory,
-            &expected(&bytes),
-            &mut semantics,
-            &mut sink
-        )
-        .unwrap_err()
-        .code(),
-        BackupErrorCode::InvalidPayload
-    );
-    assert!(semantics.finished);
-    assert!(sink.0.is_empty());
-    assert_eq!(factory.opens, 2);
 }
 
 #[test]
@@ -664,7 +558,6 @@ fn changed_output_replay_header_or_first_frame_never_reaches_sink() {
             &context(ACCOUNT, 3, 7),
             &mut factory,
             &expected(&bytes),
-            &mut ExactPayload::new(b"payload"),
             &mut sink,
         )
         .unwrap_err();
@@ -688,7 +581,6 @@ fn changed_late_output_frame_can_only_leave_a_prevalidated_prefix() {
         &context(ACCOUNT, 3, 7),
         &mut factory,
         &expected(&bytes),
-        &mut ExactPayload::new(&plaintext),
         &mut sink,
     )
     .unwrap_err();
@@ -698,59 +590,35 @@ fn changed_late_output_frame_can_only_leave_a_prevalidated_prefix() {
 }
 
 #[test]
-fn sink_observes_semantic_finish_and_errors_are_propagated() {
-    struct Semantics(Arc<AtomicBool>);
-    impl BackupPayloadValidator for Semantics {
-        fn validate_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
-            Ok(())
-        }
-        fn finish(&mut self) -> Result<(), BackupError> {
-            self.0.store(true, Ordering::Relaxed);
-            Ok(())
-        }
-    }
-    struct FailingSink(Arc<AtomicBool>, usize);
+fn sink_errors_are_propagated() {
+    struct FailingSink(usize);
     impl BackupByteSink for FailingSink {
         fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), BackupError> {
-            assert!(self.0.load(Ordering::Relaxed));
             assert!(bytes.len() <= MAX_IO_CHUNK_BYTES_V1);
-            self.1 += 1;
+            self.0 += 1;
             Err(BackupError::from_code(BackupErrorCode::IoError))
         }
     }
     let bytes = seal(b"payload");
-    let finished = Arc::new(AtomicBool::new(false));
-    let mut semantics = Semantics(finished.clone());
-    let mut sink = FailingSink(finished, 0);
+    let mut sink = FailingSink(0);
     let mut factory = Factory::new(&bytes);
     assert_eq!(
         open_object_v1(
             &context(ACCOUNT, 3, 7),
             &mut factory,
             &expected(&bytes),
-            &mut semantics,
             &mut sink
         )
         .unwrap_err()
         .code(),
         BackupErrorCode::IoError
     );
-    assert_eq!(sink.1, 1);
+    assert_eq!(sink.0, 1);
     assert_eq!(factory.dropped.load(Ordering::Relaxed), 3);
 }
 
 #[test]
-fn cancellation_inside_semantics_or_output_stops_without_more_callbacks() {
-    struct CancelValidator(Arc<AtomicBool>);
-    impl BackupPayloadValidator for CancelValidator {
-        fn validate_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
-            self.0.store(true, Ordering::Relaxed);
-            Ok(())
-        }
-        fn finish(&mut self) -> Result<(), BackupError> {
-            panic!("cancelled validation must not finish")
-        }
-    }
+fn cancellation_inside_output_stops_without_more_callbacks() {
     struct CancelSink(Arc<AtomicBool>, usize);
     impl BackupByteSink for CancelSink {
         fn write_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
@@ -762,29 +630,12 @@ fn cancellation_inside_semantics_or_output_stops_without_more_callbacks() {
     let plaintext = vec![42; 300_000];
     let bytes = seal(&plaintext);
     let mut factory = Factory::new(&bytes);
-    let mut semantics = CancelValidator(factory.cancelled.clone());
-    let mut sink = Sink::default();
-    assert_eq!(
-        open_object_v1(
-            &context(ACCOUNT, 3, 7),
-            &mut factory,
-            &expected(&bytes),
-            &mut semantics,
-            &mut sink
-        )
-        .unwrap_err()
-        .code(),
-        BackupErrorCode::Cancelled
-    );
-    assert!(sink.0.is_empty());
-    let mut factory = Factory::new(&bytes);
     let mut sink = CancelSink(factory.cancelled.clone(), 0);
     assert_eq!(
         open_object_v1(
             &context(ACCOUNT, 3, 7),
             &mut factory,
             &expected(&bytes),
-            &mut ExactPayload::new(&plaintext),
             &mut sink
         )
         .unwrap_err()

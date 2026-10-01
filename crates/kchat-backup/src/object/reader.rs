@@ -1,4 +1,4 @@
-//! KCBK V1 reader with bounded Zstd and caller-defined payload semantics.
+//! KCBK V1 reader with bounded Zstd and opaque payloads.
 //! Full validation precedes output. A private, bounded frame-digest proof guards
 //! the output replay BEFORE each frame reaches the decoder, not merely at EOF.
 
@@ -9,7 +9,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupError, BackupErrorCode,
-    BackupObjectContextV1, BackupObjectDescriptor, BackupObjectValidatorV1, BackupPayloadValidator,
+    BackupObjectContextV1, BackupObjectDescriptor, BackupObjectValidatorV1,
     MAX_CIPHERTEXT_OBJECT_BYTES_V1, MAX_COMPRESSED_OBJECT_BYTES_V1,
     MAX_ENCRYPTED_BLOCKS_PER_OBJECT_V1, MAX_IO_CHUNK_BYTES_V1,
 };
@@ -83,14 +83,10 @@ pub fn verify_object_envelope_v1(
     input.finish()
 }
 
-/// Verify, decompress and validate the entire object, then replay its plaintext
-/// to `sink`. Requires three opens: ciphertext preflight, full validation, output.
-///
-/// The semantic validator is part of the trusted validation boundary: it sees
-/// tentative plaintext and must not publish it. The sink sees only bytes from a
-/// fully validated object. Each replay frame is checked against a private digest
-/// recorded during validation BEFORE it can yield output; changed sources cannot
-/// substitute a different authenticated plaintext after the validation pass.
+/// Verify the envelope, integrity and bounded decompression, then replay opaque
+/// plaintext to `sink`. No payload schema is interpreted or validated.
+/// Requires three opens: ciphertext preflight, full verification, output.
+/// Each replay frame is checked against a private digest before decoding it.
 ///
 /// Sink/I/O failure or cancellation during replay may leave a prefix of VALIDATED
 /// plaintext in the sink. This is not an atomic import API. Use a fresh staging
@@ -99,11 +95,9 @@ pub fn open_object_v1(
     context: &BackupObjectContextV1,
     factory: &mut dyn BackupByteSourceFactory,
     expected: &ExpectedBackupObjectV1,
-    semantics: &mut dyn BackupPayloadValidator,
     sink: &mut dyn BackupByteSink,
 ) -> Result<(), BackupError> {
-    let proof = BackupObjectValidatorV1::new()
-        .validate_with_proof(context, factory, expected, semantics)?;
+    let proof = BackupObjectValidatorV1::new().validate_with_proof(context, factory, expected)?;
     process_payload(
         context,
         factory,
@@ -175,7 +169,6 @@ pub(super) fn validate_payload_v1(
     context: &BackupObjectContextV1,
     factory: &mut dyn BackupByteSourceFactory,
     expected: &ExpectedBackupObjectV1,
-    semantics: &mut dyn BackupPayloadValidator,
 ) -> Result<ReplayProof, BackupError> {
     preflight(factory, expected)?;
     let mut proof = ReplayProof {
@@ -187,13 +180,8 @@ pub(super) fn validate_payload_v1(
         factory,
         expected,
         &mut ProofMode::Record(&mut proof),
-        &mut |bytes| semantics.validate_chunk(bytes),
+        &mut |_| Ok(()),
     )?;
-    check_factory_cancelled(factory)?;
-    // EOF semantic checks (missing records, unresolved references, incomplete
-    // parser state) are mandatory, even for empty plaintext. They run once only
-    // after envelope, Zstd completion and inventory integrity have all succeeded.
-    semantics.finish()?;
     check_factory_cancelled(factory)?;
     Ok(proof)
 }
@@ -428,15 +416,6 @@ mod tests {
 
     #[test]
     fn authenticates_tag_only_final_without_claiming_payload_validity() {
-        struct NeverCalled;
-        impl BackupPayloadValidator for NeverCalled {
-            fn validate_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
-                panic!("invalid Zstd must not yield plaintext")
-            }
-            fn finish(&mut self) -> Result<(), BackupError> {
-                panic!("invalid Zstd must not finish semantics")
-            }
-        }
         let master = MnemonicBackupKey::import_from_raw(&[3; 32]).unwrap();
         let account = BackupAccountId::parse("00112233-4455-6677-8899-aabbccddeeff").unwrap();
         let namespace = BackupId::derive(&master, &account).unwrap();
@@ -472,7 +451,7 @@ mod tests {
         // A full validator must never report it as a restorable backup.
         assert_eq!(
             BackupObjectValidatorV1::new()
-                .validate(&context, &mut factory, &expected, &mut NeverCalled)
+                .validate(&context, &mut factory, &expected)
                 .unwrap_err()
                 .code(),
             BackupErrorCode::InvalidCompressedData
@@ -532,18 +511,6 @@ mod tests {
             vec![0x28, 0xb5, 0x2f, 0xfd, 1, 0, 1],
             vec![0x28, 0xb5, 0x2f, 0xfd, 0, 14 << 3],
         ];
-        struct Policy {
-            finished: bool,
-        }
-        impl BackupPayloadValidator for Policy {
-            fn validate_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
-                Ok(())
-            }
-            fn finish(&mut self) -> Result<(), BackupError> {
-                self.finished = true;
-                Ok(())
-            }
-        }
         struct NoOutput;
         impl BackupByteSink for NoOutput {
             fn write_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
@@ -570,20 +537,12 @@ mod tests {
                     .unwrap();
             let mut factory = Factory(bytes);
             verify_object_envelope_v1(&context, &mut factory, &expected).unwrap();
-            let mut policy = Policy { finished: false };
-            let error = open_object_v1(
-                &context,
-                &mut factory,
-                &expected,
-                &mut policy,
-                &mut NoOutput,
-            )
-            .unwrap_err();
+            let error =
+                open_object_v1(&context, &mut factory, &expected, &mut NoOutput).unwrap_err();
             assert!(matches!(
                 error.code(),
                 BackupErrorCode::InvalidCompressedData | BackupErrorCode::ResourceLimitExceeded
             ));
-            assert!(!policy.finished);
         }
     }
 }

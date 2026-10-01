@@ -10,8 +10,8 @@ pub use key::{
     import_from_raw, restore_from_mnemonic,
 };
 pub use reader::{
-    BackupCiphertextSource, BackupCiphertextSourceFactory, BackupPayloadValidator,
-    BackupPlaintextSink, open_backup_object_v1,
+    BackupCiphertextSource, BackupCiphertextSourceFactory, BackupPlaintextSink,
+    open_backup_object_v1,
 };
 pub use writer::{
     BackupCiphertextSink, BackupObjectMetadata, BackupPlaintextSource, seal_backup_object_v1,

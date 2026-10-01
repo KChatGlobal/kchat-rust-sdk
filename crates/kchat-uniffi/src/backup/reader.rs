@@ -11,8 +11,7 @@ use std::sync::{
 
 use kchat_backup::{
     BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupError, BackupErrorCode,
-    BackupPayloadValidator as CorePayloadValidator, ExpectedBackupObjectV1, MAX_IO_CHUNK_BYTES_V1,
-    open_object_v1,
+    ExpectedBackupObjectV1, MAX_IO_CHUNK_BYTES_V1, open_object_v1,
 };
 use zeroize::Zeroizing;
 
@@ -36,15 +35,8 @@ pub trait BackupCiphertextSource: Send + Sync {
     fn release_stream(&self) -> Result<(), BackupFfiError>;
 }
 
-/// Trusted caller-specific validation. Bytes are tentative during this pass;
-/// do not import or publish them. `finish` checks whole-payload invariants.
-#[uniffi::export(with_foreign)]
-pub trait BackupPayloadValidator: Send + Sync {
-    fn validate_chunk(&self, bytes: Vec<u8>) -> Result<(), BackupFfiError>;
-    fn finish(&self) -> Result<(), BackupFfiError>;
-}
-
-/// Receives plaintext only after the complete object has passed validation.
+/// Receives opaque plaintext after envelope, integrity and compression checks.
+/// Schema validation is outside the SDK.
 /// Output may contain a prefix if I/O/cancellation fails during replay; callers
 /// must discard staging on error and activate it only after full restore.
 #[uniffi::export(with_foreign)]
@@ -57,7 +49,6 @@ pub fn open_backup_object_v1(
     context: Arc<BackupObjectContext>,
     factory: Arc<dyn BackupCiphertextSourceFactory>,
     metadata: BackupObjectMetadata,
-    validator: Arc<dyn BackupPayloadValidator>,
     sink: Arc<dyn BackupPlaintextSink>,
 ) -> Result<(), BackupFfiError> {
     let expected_hash: [u8; 32] = metadata
@@ -75,13 +66,11 @@ pub fn open_backup_object_v1(
         factory,
         callback_failed: Arc::clone(&callback_failed),
     };
-    let mut validator_adapter = ValidatorAdapter { validator };
     let mut sink_adapter = SinkAdapter { sink };
     let result = open_object_v1(
         context.as_core(),
         &mut factory_adapter,
         &expected,
-        &mut validator_adapter,
         &mut sink_adapter,
     );
     // A failed cancellation callback looks like cancellation to the synchronous
@@ -154,35 +143,6 @@ fn callback_cancelled(flag: &AtomicBool, result: Result<bool, BackupFfiError>) -
             true
         }
     }
-}
-
-struct ValidatorAdapter {
-    validator: Arc<dyn BackupPayloadValidator>,
-}
-
-impl CorePayloadValidator for ValidatorAdapter {
-    fn validate_chunk(&mut self, plaintext: &[u8]) -> Result<(), BackupError> {
-        if plaintext.len() > MAX_IO_CHUNK_BYTES_V1 {
-            return Err(BackupError::from_code(BackupErrorCode::InvalidState));
-        }
-        self.validator
-            .validate_chunk(plaintext.to_vec())
-            .map_err(semantic_callback_error)
-    }
-
-    fn finish(&mut self) -> Result<(), BackupError> {
-        self.validator.finish().map_err(semantic_callback_error)
-    }
-}
-
-fn semantic_callback_error(error: BackupFfiError) -> BackupError {
-    let code = match error {
-        BackupFfiError::InvalidPayload => BackupErrorCode::InvalidPayload,
-        BackupFfiError::ResourceLimitExceeded => BackupErrorCode::ResourceLimitExceeded,
-        BackupFfiError::Cancelled => BackupErrorCode::Cancelled,
-        _ => BackupErrorCode::IoError,
-    };
-    BackupError::from_code(code)
 }
 
 struct SinkAdapter {

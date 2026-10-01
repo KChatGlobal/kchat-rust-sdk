@@ -102,7 +102,7 @@ impl Factory {
     fn new(bytes: &[u8]) -> Self {
         let bytes: Arc<[u8]> = bytes.into();
         Self {
-            versions: VecDeque::from([bytes.clone(), bytes.clone(), bytes]),
+            versions: VecDeque::from([bytes.clone(), bytes]),
             opens: 0,
             max_read: usize::MAX,
             cancel_on_read: false,
@@ -196,6 +196,15 @@ fn rejects_inventory_mismatch_before_opening_the_decryption_pass() {
         let error = verify_object_envelope_v1(&context(ACCOUNT, 3, 7), &mut factory, &metadata)
             .unwrap_err();
         assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
+        assert_eq!(factory.opens, 1);
+        assert_eq!(factory.dropped.load(Ordering::Relaxed), 1);
+
+        let mut factory = Factory::new(&bytes);
+        let mut sink = Sink::default();
+        let error = open_object_v1(&context(ACCOUNT, 3, 7), &mut factory, &metadata, &mut sink)
+            .unwrap_err();
+        assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
+        assert!(sink.0.is_empty());
         assert_eq!(factory.opens, 1);
         assert_eq!(factory.dropped.load(Ordering::Relaxed), 1);
     }
@@ -502,7 +511,7 @@ fn rejects_each_truncation_point_of_a_small_object() {
 }
 
 #[test]
-fn opens_opaque_writer_objects_without_schema_validation() {
+fn opens_opaque_writer_objects_using_only_two_sources() {
     for plaintext in [
         vec![],
         b"opaque payload".to_vec(),
@@ -521,8 +530,8 @@ fn opens_opaque_writer_objects_without_schema_validation() {
         )
         .unwrap();
         assert_eq!(sink.0, plaintext);
-        assert_eq!(factory.opens, 3);
-        assert_eq!(factory.dropped.load(Ordering::Relaxed), 3);
+        assert_eq!(factory.opens, 2);
+        assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
     }
 }
 
@@ -546,13 +555,13 @@ fn validator_completes_once_without_opening_an_output_pass() {
 }
 
 #[test]
-fn changed_output_replay_header_or_first_frame_never_reaches_sink() {
+fn corrupted_reopened_nonce_or_first_frame_never_reaches_sink() {
     let bytes = seal(b"payload");
-    let mut changed_frame = bytes.clone();
-    changed_frame[33] ^= 1;
-    for changed in [seal(b"payload"), changed_frame] {
+    for index in [10, 33, bytes.len() - 1] {
+        let mut changed = bytes.clone();
+        changed[index] ^= 1;
         let mut factory = Factory::new(&bytes);
-        factory.versions[2] = changed.into();
+        factory.versions[1] = changed.into();
         let mut sink = Sink::default();
         let error = open_object_v1(
             &context(ACCOUNT, 3, 7),
@@ -561,21 +570,44 @@ fn changed_output_replay_header_or_first_frame_never_reaches_sink() {
             &mut sink,
         )
         .unwrap_err();
-        assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
+        assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
         assert!(sink.0.is_empty());
-        assert_eq!(factory.dropped.load(Ordering::Relaxed), 3);
+        assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
     }
 }
 
 #[test]
-fn changed_late_output_frame_can_only_leave_a_prevalidated_prefix() {
+fn valid_replacement_is_rejected_at_completion_even_after_output() {
+    let original = seal(b"payload-A");
+    let replacement = seal(b"payload-B");
+    assert_eq!(original.len(), replacement.len());
+    let mut factory = Factory::new(&original);
+    factory.versions[1] = replacement.into();
+    let mut staging = Sink::default();
+    let error = open_object_v1(
+        &context(ACCOUNT, 3, 7),
+        &mut factory,
+        &expected(&original),
+        &mut staging,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
+    // AEAD is valid, but these bytes don't belong to the expected object. The
+    // caller must discard staging on error rather than committing the output.
+    assert_eq!(staging.0, b"payload-B");
+    assert_eq!(factory.opens, 2);
+    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn corrupted_late_frame_leaves_only_an_authenticated_prefix() {
     let plaintext = noisy_payload();
     let bytes = seal(&plaintext);
     let mut changed = bytes.clone();
     let last = frames(&bytes).last().unwrap().clone();
     changed[last.start + 4] ^= 1;
     let mut factory = Factory::new(&bytes);
-    factory.versions[2] = changed.into();
+    factory.versions[1] = changed.into();
     let mut sink = Sink::default();
     let error = open_object_v1(
         &context(ACCOUNT, 3, 7),
@@ -584,9 +616,11 @@ fn changed_late_output_frame_can_only_leave_a_prevalidated_prefix() {
         &mut sink,
     )
     .unwrap_err();
-    assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
+    assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
+    assert!(!sink.0.is_empty());
     assert!(sink.0.len() < plaintext.len());
     assert_eq!(sink.0, plaintext[..sink.0.len()]);
+    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -614,7 +648,7 @@ fn sink_errors_are_propagated() {
         BackupErrorCode::IoError
     );
     assert_eq!(sink.0, 1);
-    assert_eq!(factory.dropped.load(Ordering::Relaxed), 3);
+    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -643,4 +677,6 @@ fn cancellation_inside_output_stops_without_more_callbacks() {
         BackupErrorCode::Cancelled
     );
     assert_eq!(sink.1, 1);
+    assert_eq!(factory.opens, 2);
+    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
 }

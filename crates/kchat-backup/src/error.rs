@@ -14,6 +14,14 @@ pub enum BackupErrorCode {
     AuthenticationFailed,
     ResourceLimitExceeded,
     Cancelled,
+    /// Ciphertext differs from the size or SHA-256 in the caller's inventory.
+    IntegrityMismatch,
+    /// Truncated or structurally invalid KCBK envelope.
+    MalformedObject,
+    /// Reserved for unsupported future operations.
+    NotImplemented,
+    /// Invalid, truncated or unsupported Zstd payload in an authenticated object.
+    InvalidCompressedData,
 }
 
 #[derive(Debug, Error)]

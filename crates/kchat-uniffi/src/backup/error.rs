@@ -26,6 +26,14 @@ pub enum BackupFfiError {
     ResourceLimitExceeded,
     #[error("backup operation failed: cancelled")]
     Cancelled,
+    #[error("backup operation failed: integrity mismatch")]
+    IntegrityMismatch,
+    #[error("backup operation failed: malformed object")]
+    MalformedObject,
+    #[error("backup operation failed: not implemented")]
+    NotImplemented,
+    #[error("backup operation failed: invalid compressed data")]
+    InvalidCompressedData,
 }
 
 impl From<BackupError> for BackupFfiError {
@@ -43,6 +51,10 @@ impl From<BackupError> for BackupFfiError {
             BackupErrorCode::AuthenticationFailed => Self::AuthenticationFailed,
             BackupErrorCode::ResourceLimitExceeded => Self::ResourceLimitExceeded,
             BackupErrorCode::Cancelled => Self::Cancelled,
+            BackupErrorCode::IntegrityMismatch => Self::IntegrityMismatch,
+            BackupErrorCode::MalformedObject => Self::MalformedObject,
+            BackupErrorCode::NotImplemented => Self::NotImplemented,
+            BackupErrorCode::InvalidCompressedData => Self::InvalidCompressedData,
         }
     }
 }

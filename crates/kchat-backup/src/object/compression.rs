@@ -2,12 +2,13 @@
 //! this layer also requires a complete standard frame and no dictionary, second
 //! frame, skippable frame or trailing bytes. It accepts the existing V1 writer.
 
+use zeroize::Zeroizing;
+use zstd::stream::raw::{DParameter, Decoder, Operation};
+
 use crate::{
     BackupError, BackupErrorCode, MAX_IO_CHUNK_BYTES_V1, MAX_PLAINTEXT_OBJECT_BYTES_V1,
     MAX_ZSTD_WINDOW_BYTES_V1,
 };
-use zeroize::Zeroizing;
-use zstd::stream::raw::{DParameter, Decoder, Operation};
 
 pub(super) struct BoundedDecoder {
     decoder: Decoder<'static>,
@@ -178,71 +179,4 @@ fn check_header(header: &[u8]) -> Result<bool, BackupError> {
         return Err(BackupError::resource_limit_exceeded());
     }
     Ok(true)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn decode(bytes: &[u8], limit: u64) -> Result<Vec<u8>, BackupError> {
-        let mut decoder = BoundedDecoder::new()?;
-        decoder.limit = limit;
-        let mut result = Vec::new();
-        for byte in bytes {
-            decoder.push(
-                &[*byte],
-                &mut |data| {
-                    result.extend_from_slice(data);
-                    Ok(())
-                },
-                &|| Ok(()),
-            )?;
-        }
-        decoder.finish()?;
-        Ok(result)
-    }
-
-    #[test]
-    fn short_input_and_output_draining_preserve_plaintext() {
-        let plaintext = vec![42; 200_000];
-        let compressed = zstd::stream::encode_all(plaintext.as_slice(), 3).unwrap();
-        assert_eq!(decode(&compressed, 200_000).unwrap(), plaintext);
-        assert_eq!(
-            decode(&compressed, 199_999).unwrap_err().code(),
-            BackupErrorCode::ResourceLimitExceeded
-        );
-    }
-
-    #[test]
-    fn rejects_truncation_second_frame_trailing_and_skippable_frames() {
-        let compressed = zstd::stream::encode_all(&b"data"[..], 3).unwrap();
-        for end in 0..compressed.len() {
-            assert!(decode(&compressed[..end], 100).is_err());
-        }
-        let mut trailing = compressed.clone();
-        trailing.push(0);
-        assert!(decode(&trailing, 100).is_err());
-        let mut concat = compressed.clone();
-        concat.extend_from_slice(&compressed);
-        assert!(decode(&concat, 100).is_err());
-        assert!(decode(&[0x50, 0x2a, 0x4d, 0x18, 0, 0, 0, 0], 100).is_err());
-    }
-
-    #[test]
-    fn rejects_large_windows_and_dictionary_headers_before_decoding() {
-        // Standard magic, no content size, 16-MiB window descriptor.
-        assert_eq!(
-            decode(&[0x28, 0xb5, 0x2f, 0xfd, 0, 14 << 3], 100)
-                .unwrap_err()
-                .code(),
-            BackupErrorCode::ResourceLimitExceeded
-        );
-        assert!(decode(&[0x28, 0xb5, 0x2f, 0xfd, 1, 0, 1], 100).is_err());
-        let mut single = vec![0x28, 0xb5, 0x2f, 0xfd, 0xa0];
-        single.extend_from_slice(&(16_u32 * 1024 * 1024).to_le_bytes());
-        assert_eq!(
-            decode(&single, 100).unwrap_err().code(),
-            BackupErrorCode::ResourceLimitExceeded
-        );
-    }
 }

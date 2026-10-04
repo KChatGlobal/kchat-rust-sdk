@@ -15,7 +15,7 @@ use kchat_backup::{
 };
 use zeroize::Zeroizing;
 
-use super::{BackupFfiError, BackupObjectContext, BackupObjectMetadata};
+use super::{BackupFfiError, BackupMasterKey, BackupObjectMetadata};
 
 /// Open the same immutable ciphertext version anew on every call. Each source
 /// must start at byte zero; no seek or platform-specific file API is imposed.
@@ -44,13 +44,20 @@ pub trait BackupPlaintextSink: Send + Sync {
     fn write_chunk(&self, bytes: Vec<u8>) -> Result<(), BackupFfiError>;
 }
 
+/// Derive the backup ID and object context, then decrypt/decompress one object.
+/// The backup ID is derived from the key/account; no inventory backup ID is compared.
+/// Output is provisional: discard staging on any error.
 #[uniffi::export]
 pub fn open_backup_object_v1(
-    context: Arc<BackupObjectContext>,
+    key: Arc<BackupMasterKey>,
+    account_id: String,
+    chunk_id: Vec<u8>,
     factory: Arc<dyn BackupCiphertextSourceFactory>,
     metadata: BackupObjectMetadata,
     sink: Arc<dyn BackupPlaintextSink>,
 ) -> Result<(), BackupFfiError> {
+    let backup_id = key.derive_backup_id(account_id.clone())?;
+    let context = key.create_object_context(account_id, backup_id, chunk_id)?;
     let expected_hash: [u8; 32] = metadata
         .ciphertext_sha256
         .try_into()

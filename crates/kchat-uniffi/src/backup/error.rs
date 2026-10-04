@@ -30,8 +30,6 @@ pub enum BackupFfiError {
     IntegrityMismatch,
     #[error("backup operation failed: malformed object")]
     MalformedObject,
-    #[error("backup operation failed: not implemented")]
-    NotImplemented,
     #[error("backup operation failed: invalid compressed data")]
     InvalidCompressedData,
 }
@@ -53,7 +51,6 @@ impl From<BackupError> for BackupFfiError {
             BackupErrorCode::Cancelled => Self::Cancelled,
             BackupErrorCode::IntegrityMismatch => Self::IntegrityMismatch,
             BackupErrorCode::MalformedObject => Self::MalformedObject,
-            BackupErrorCode::NotImplemented => Self::NotImplemented,
             BackupErrorCode::InvalidCompressedData => Self::InvalidCompressedData,
         }
     }

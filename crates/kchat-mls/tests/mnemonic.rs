@@ -7,12 +7,36 @@ use p256::ecdsa::{
     signature::Verifier as _,
 };
 
-const USER_ID: &str = "00112233-4455-6677-8899-aabbccddeeff";
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
 fn bytes(hex: &str) -> [u8; 32] {
     assert_eq!(hex.len(), 64);
     std::array::from_fn(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+}
+
+#[test]
+fn derives_recovery_pair_from_mnemonic_without_user_id() {
+    let ed = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::Ed25519).unwrap();
+    assert_eq!(
+        ed.export_private_key(),
+        bytes("ff5ff68d317dbac80476dd3d86edbded67928661695ddbcb0b4b73f5eac93530")
+    );
+    assert_eq!(
+        ed.public_key(),
+        bytes("e91441a2e27aae26a5a1c4a79057a15cf11eeafde63f08c803c20558c3cfe007")
+    );
+
+    let p256 = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
+    assert_eq!(
+        p256.export_private_key(),
+        bytes("77ed7a856a5ae22bc5bd3d6ca29db7093ebdf26f1c8508f1aae6ddba3f32fbb1")
+    );
+    assert_eq!(
+        p256.public_key(),
+        bytes_any(
+            "04c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a"
+        )
+    );
 }
 
 #[test]
@@ -24,32 +48,22 @@ fn matches_independent_recovery_vectors_and_can_sign() {
     let vectors = [
         (
             PHRASE,
-            USER_ID,
-            "8f0ba8ccacc985ec2f009b55d22d67cc4e7061096f4d37f174a03a8a076db81b",
-            "34ec80fad18e2e212526b5315c47009e028349e557996551bc6a17456d99c7e4",
-        ),
-        (
-            PHRASE,
-            "00112233-4455-6677-8899-aabbccddeefe",
-            "0a39e8f011562c5d5928fee730246fff407123c593a4c4e4a15034616668b145",
-            "2a6931ac72b34b6206760d46d6dc3010c533ac92c485c8831c393750586a19f9",
+            "ff5ff68d317dbac80476dd3d86edbded67928661695ddbcb0b4b73f5eac93530",
+            "e91441a2e27aae26a5a1c4a79057a15cf11eeafde63f08c803c20558c3cfe007",
         ),
         (
             zoo.as_str(),
-            USER_ID,
-            "d37aed1f9750f99c5bdd53220a59ed687e44bd8c8d797ee98f5ecf3621d93cd2",
-            "65716a31bd0e2674d12e30fabb0706858e51159145ed423bafd4d402cb54225f",
+            "7486b46029b22f7b6dad69c079368869c036b14c1d6954b5ac0500aeb7d7c8f7",
+            "a70b8228c1fc8f7add9612785684791b7bc49007d76ea2bbf468694f665a9509",
         ),
         (
             twelve,
-            USER_ID,
-            "a2a2d6cafba8a2a03f9dd834accef32e4b33c2862a77609beda27921ba15277b",
-            "6831019e5b7e766c04ba869ffde610a428fba8213b65319cb5d5cfa6527c2349",
+            "42607c0b25a444d0d450ed0c626c88a2e80138e438687e65627aa68ee13daff2",
+            "9857253c49add3ae1f9c79ea4e48ba8cca8571ba815d391103bcd4fcc1d630d2",
         ),
     ];
-    for (mnemonic, user_id, private_key, public_key) in vectors {
-        let pair =
-            derive_recovery_key_pair(mnemonic, user_id, RecoveryKeyAlgorithm::Ed25519).unwrap();
+    for (mnemonic, private_key, public_key) in vectors {
+        let pair = derive_recovery_key_pair(mnemonic, RecoveryKeyAlgorithm::Ed25519).unwrap();
         assert_eq!(pair.export_private_key(), bytes(private_key));
         assert_eq!(pair.public_key(), bytes(public_key));
         let signer = SigningKey::from_bytes(&pair.export_private_key());
@@ -73,12 +87,12 @@ fn matches_independent_recovery_vectors_and_can_sign() {
 #[test]
 fn derives_p256_ecdsa_with_independent_sec1_vectors_and_signs() {
     // Independently generated using Python hashlib/hmac and cryptography SECP256R1/X9.62.
-    let pair = derive_recovery_key_pair(PHRASE, USER_ID, RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
+    let pair = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
     assert_eq!(
         pair.export_private_key(),
-        bytes("23a97dc00b349f96034c3b80af7e15ac54fcec4a4d48edf289033a5cf22de309")
+        bytes("77ed7a856a5ae22bc5bd3d6ca29db7093ebdf26f1c8508f1aae6ddba3f32fbb1")
     );
-    let expected_public = "0445c5b666571800528f30fae198fd22943ed84e9b22fb1734446cb1903a235daac826b4b7ad2d5fb4df9c569f416195089002a8c3d805239e6eaa256c731b5da9";
+    let expected_public = "04c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a";
     assert_eq!(pair.public_key().len(), 65);
     assert_eq!(pair.public_key()[0], 0x04);
     assert_eq!(pair.public_key(), bytes_any(expected_public));
@@ -88,42 +102,29 @@ fn derives_p256_ecdsa_with_independent_sec1_vectors_and_signs() {
     verifier.verify(b"recovery proof", &signature).unwrap();
     assert!(verifier.verify(b"other proof", &signature).is_err());
 
-    let other = derive_recovery_key_pair(
-        PHRASE,
-        "00112233-4455-6677-8899-aabbccddeefe",
-        RecoveryKeyAlgorithm::P256Ecdsa,
-    )
-    .unwrap();
+    let twelve = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let other = derive_recovery_key_pair(twelve, RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
     assert_eq!(
         other.export_private_key(),
-        bytes("e71a5f519c76f3203957f7675e0213cba25a50ec10d7e7fa42a0af26c421fb93")
+        bytes("ad839e943124df53b1c4ebcd1032969c0f76eef59375acd1733fb0a354a71de7")
     );
     assert_eq!(
         other.public_key(),
         bytes_any(
-            "04467c6192dd88863bfc5c4caca93ec1472a5deab3263e1ae47557a6179adc94f8ac4d4cad9f14934057f6f6f354607955a39bb68910652eaa75655f415029e8be"
+            "049c510f45212cb231ad8df8f53b94c970428f1e00784134dbdf57787dad4e2b4f1ebf446f096bd34f03c178361cd68faab5985a32c453587704a60cb8c2ac19e0"
         )
     );
     assert_ne!(pair.public_key(), other.public_key());
 }
 
 #[test]
-fn algorithm_selection_separates_key_pairs_and_canonicalizes_uuid() {
-    let selected =
-        derive_recovery_key_pair(PHRASE, USER_ID, RecoveryKeyAlgorithm::Ed25519).unwrap();
+fn algorithm_selection_separates_key_pairs() {
+    let selected = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::Ed25519).unwrap();
     assert_eq!(
         selected.export_private_key(),
-        bytes("8f0ba8ccacc985ec2f009b55d22d67cc4e7061096f4d37f174a03a8a076db81b")
+        bytes("ff5ff68d317dbac80476dd3d86edbded67928661695ddbcb0b4b73f5eac93530")
     );
-    let p256 = derive_recovery_key_pair(
-        PHRASE,
-        "00112233-4455-6677-8899-AABBCCDDEEFF",
-        RecoveryKeyAlgorithm::P256Ecdsa,
-    )
-    .unwrap();
-    let p256_lower =
-        derive_recovery_key_pair(PHRASE, USER_ID, RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
-    assert_eq!(p256.export_private_key(), p256_lower.export_private_key());
+    let p256 = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
     assert_ne!(p256.export_private_key(), selected.export_private_key());
 }
 
@@ -146,8 +147,8 @@ fn generates_each_supported_word_count_and_recovers_on_another_call() {
                 RecoveryKeyAlgorithm::Ed25519,
                 RecoveryKeyAlgorithm::P256Ecdsa,
             ] {
-                let original = derive_recovery_key_pair(&phrase, USER_ID, algorithm).unwrap();
-                let recovered = derive_recovery_key_pair(&phrase, USER_ID, algorithm).unwrap();
+                let original = derive_recovery_key_pair(&phrase, algorithm).unwrap();
+                let recovered = derive_recovery_key_pair(&phrase, algorithm).unwrap();
                 assert_eq!(
                     original.export_private_key(),
                     recovered.export_private_key()
@@ -169,34 +170,16 @@ fn rejects_unsupported_generation_word_counts() {
 }
 
 #[test]
-fn canonicalizes_uuid_and_preserves_mnemonic_parser_normalization() {
-    let original =
-        derive_recovery_key_pair(PHRASE, USER_ID, RecoveryKeyAlgorithm::Ed25519).unwrap();
-    for id in [
-        "00112233-4455-6677-8899-AABBCCDDEEFF",
-        "00112233445566778899aabbccddeeff",
-    ] {
-        let pair = derive_recovery_key_pair(PHRASE, id, RecoveryKeyAlgorithm::Ed25519).unwrap();
-        assert_eq!(original.export_private_key(), pair.export_private_key());
-        assert_eq!(original.public_key(), pair.public_key());
-    }
+fn preserves_mnemonic_parser_normalization() {
+    let original = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::Ed25519).unwrap();
     for phrase in [
         format!("  {PHRASE}\n"),
         PHRASE.replace(' ', "\t"),
         PHRASE.replace(' ', "\u{3000}"),
     ] {
-        let pair =
-            derive_recovery_key_pair(&phrase, USER_ID, RecoveryKeyAlgorithm::Ed25519).unwrap();
+        let pair = derive_recovery_key_pair(&phrase, RecoveryKeyAlgorithm::Ed25519).unwrap();
         assert_eq!(original.export_private_key(), pair.export_private_key());
     }
-    assert!(
-        derive_recovery_key_pair(
-            PHRASE,
-            "00000000-0000-0000-0000-000000000000",
-            RecoveryKeyAlgorithm::Ed25519
-        )
-        .is_ok()
-    );
 }
 
 #[test]
@@ -210,20 +193,8 @@ fn rejects_invalid_phrase_lengths_words_and_checksum() {
         PHRASE.replace("art", "notaword"),
         PHRASE.replace("art", "こんにちは"),
     ] {
-        let error =
-            derive_recovery_key_pair(&phrase, USER_ID, RecoveryKeyAlgorithm::Ed25519).unwrap_err();
+        let error = derive_recovery_key_pair(&phrase, RecoveryKeyAlgorithm::Ed25519).unwrap_err();
         assert_eq!(error, MnemonicError::InvalidMnemonic);
         assert_eq!(error.to_string(), "invalid recovery mnemonic");
-    }
-}
-
-#[test]
-fn rejects_invalid_uuid_without_echoing_inputs() {
-    for user_id in ["", "alice", "00112233-4455-6677-8899-aabbccddeefg"] {
-        let error =
-            derive_recovery_key_pair(PHRASE, user_id, RecoveryKeyAlgorithm::Ed25519).unwrap_err();
-        assert_eq!(error, MnemonicError::InvalidUserId);
-        assert_eq!(error.to_string(), "invalid recovery user ID");
-        assert_eq!(format!("{error:?}"), "InvalidUserId");
     }
 }

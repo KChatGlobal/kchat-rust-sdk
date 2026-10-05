@@ -3,7 +3,6 @@ use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
 use p256::ecdsa::SigningKey as P256SigningKey;
 use sha2::Sha256;
-use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const MASTER_KEY_INFO: &[u8] = b"KCHAT_RECOVERY_V1_MASTER";
@@ -22,8 +21,6 @@ pub enum MnemonicError {
     InvalidWordCount,
     #[error("invalid recovery mnemonic")]
     InvalidMnemonic,
-    #[error("invalid recovery user ID")]
-    InvalidUserId,
     #[error("recovery randomness unavailable")]
     RandomnessUnavailable,
     #[error("recovery key derivation failed")]
@@ -71,15 +68,13 @@ pub fn generate_recovery_mnemonic(word_count: u32) -> Result<String, MnemonicErr
 }
 
 /// Derives a deterministic recovery signing pair for the selected algorithm.
-/// The mnemonic uses an empty BIP39 passphrase; user_id must be a UUID.
+/// The mnemonic uses an empty BIP39 passphrase.
 pub fn derive_recovery_key_pair(
     mnemonic: &str,
-    user_id: &str,
     algorithm: RecoveryKeyAlgorithm,
 ) -> Result<RecoveryKeyPair, MnemonicError> {
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic)
         .map_err(|_| MnemonicError::InvalidMnemonic)?;
-    let user_id = Uuid::parse_str(user_id).map_err(|_| MnemonicError::InvalidUserId)?;
     let seed = Zeroizing::new(mnemonic.to_seed(""));
     let mut master = Zeroizing::new([0_u8; 32]);
     Hkdf::<Sha256>::new(None, seed.as_ref())
@@ -90,9 +85,7 @@ pub fn derive_recovery_key_pair(
         RecoveryKeyAlgorithm::Ed25519 => ED25519_KEY_INFO,
         RecoveryKeyAlgorithm::P256Ecdsa => P256_ECDSA_KEY_INFO,
     };
-    let mut info = Vec::with_capacity(label.len() + 17);
-    info.extend_from_slice(label);
-    info.extend_from_slice(user_id.as_bytes());
+    let mut info = label.to_vec();
 
     let mut private_key = Zeroizing::new([0_u8; 32]);
     let hkdf = Hkdf::<Sha256>::new(None, master.as_ref());

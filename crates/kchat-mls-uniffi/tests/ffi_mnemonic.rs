@@ -2,7 +2,6 @@ use mls_mobile_sdk_rs::mnemonic::{
     MnemonicFfiError, RecoveryKeyAlgorithm, derive_recovery_key_pair, generate_recovery_mnemonic,
 };
 
-const USER_ID: &str = "00112233-4455-6677-8899-aabbccddeeff";
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
 fn bytes(hex: &str) -> Vec<u8> {
@@ -14,52 +13,39 @@ fn bytes(hex: &str) -> Vec<u8> {
 
 #[test]
 fn exposes_versioned_recovery_bytes_without_an_mls_provider() {
-    let pair = derive_recovery_key_pair(
-        PHRASE.to_owned(),
-        USER_ID.to_owned(),
-        RecoveryKeyAlgorithm::Ed25519,
-    )
-    .unwrap();
+    let pair = derive_recovery_key_pair(PHRASE.to_owned(), RecoveryKeyAlgorithm::Ed25519).unwrap();
     assert_eq!(pair.format_version, 1);
     assert_eq!(pair.algorithm, RecoveryKeyAlgorithm::Ed25519);
     assert_eq!(
         pair.private_key,
-        bytes("8f0ba8ccacc985ec2f009b55d22d67cc4e7061096f4d37f174a03a8a076db81b")
+        bytes("ff5ff68d317dbac80476dd3d86edbded67928661695ddbcb0b4b73f5eac93530")
     );
     assert_eq!(
         pair.public_key,
-        bytes("34ec80fad18e2e212526b5315c47009e028349e557996551bc6a17456d99c7e4")
+        bytes("e91441a2e27aae26a5a1c4a79057a15cf11eeafde63f08c803c20558c3cfe007")
     );
 }
 
 #[test]
 fn exports_p256_ecdsa_as_raw_scalar_and_uncompressed_sec1_public_key() {
-    let pair = derive_recovery_key_pair(
-        PHRASE.to_owned(),
-        USER_ID.to_owned(),
-        RecoveryKeyAlgorithm::P256Ecdsa,
-    )
-    .unwrap();
+    let pair =
+        derive_recovery_key_pair(PHRASE.to_owned(), RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
     assert_eq!(pair.format_version, 1);
     assert_eq!(pair.algorithm, RecoveryKeyAlgorithm::P256Ecdsa);
     assert_eq!(
         pair.private_key,
-        bytes("23a97dc00b349f96034c3b80af7e15ac54fcec4a4d48edf289033a5cf22de309")
+        bytes("77ed7a856a5ae22bc5bd3d6ca29db7093ebdf26f1c8508f1aae6ddba3f32fbb1")
     );
     assert_eq!(pair.public_key.len(), 65);
     assert_eq!(pair.public_key[0], 0x04);
     assert_eq!(
         pair.public_key,
         bytes(
-            "0445c5b666571800528f30fae198fd22943ed84e9b22fb1734446cb1903a235daac826b4b7ad2d5fb4df9c569f416195089002a8c3d805239e6eaa256c731b5da9"
+            "04c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a"
         )
     );
-    let ed25519 = derive_recovery_key_pair(
-        PHRASE.to_owned(),
-        USER_ID.to_owned(),
-        RecoveryKeyAlgorithm::Ed25519,
-    )
-    .unwrap();
+    let ed25519 =
+        derive_recovery_key_pair(PHRASE.to_owned(), RecoveryKeyAlgorithm::Ed25519).unwrap();
     assert_ne!(pair.private_key, ed25519.private_key);
 }
 
@@ -72,10 +58,8 @@ fn recovers_generated_phrase_through_native_api() {
             RecoveryKeyAlgorithm::Ed25519,
             RecoveryKeyAlgorithm::P256Ecdsa,
         ] {
-            let original =
-                derive_recovery_key_pair(phrase.clone(), USER_ID.to_owned(), algorithm).unwrap();
-            let recovered =
-                derive_recovery_key_pair(phrase.clone(), USER_ID.to_owned(), algorithm).unwrap();
+            let original = derive_recovery_key_pair(phrase.clone(), algorithm).unwrap();
+            let recovered = derive_recovery_key_pair(phrase.clone(), algorithm).unwrap();
             assert_eq!(original.private_key, recovered.private_key);
             assert_eq!(original.public_key, recovered.public_key);
             assert_eq!(original.private_key.len(), 32);
@@ -104,27 +88,11 @@ fn maps_unsupported_generation_word_counts() {
 #[test]
 fn maps_redacted_input_errors() {
     assert!(matches!(
-        derive_recovery_key_pair(
-            "invalid phrase".to_owned(),
-            USER_ID.to_owned(),
-            RecoveryKeyAlgorithm::Ed25519
-        ),
+        derive_recovery_key_pair("invalid phrase".to_owned(), RecoveryKeyAlgorithm::Ed25519),
         Err(MnemonicFfiError::InvalidMnemonic)
-    ));
-    assert!(matches!(
-        derive_recovery_key_pair(
-            PHRASE.to_owned(),
-            "alice".to_owned(),
-            RecoveryKeyAlgorithm::P256Ecdsa
-        ),
-        Err(MnemonicFfiError::InvalidUserId)
     ));
     assert_eq!(
         MnemonicFfiError::InvalidMnemonic.to_string(),
         "invalid recovery mnemonic"
-    );
-    assert_eq!(
-        MnemonicFfiError::InvalidUserId.to_string(),
-        "invalid recovery user ID"
     );
 }

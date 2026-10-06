@@ -1,5 +1,5 @@
 use bip39::{Language, Mnemonic};
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, pkcs8::EncodePublicKey as _};
 use hkdf::Hkdf;
 use p256::ecdsa::SigningKey as P256SigningKey;
 use sha2::Sha256;
@@ -39,6 +39,7 @@ impl RecoveryKeyPair {
         self.private_key
     }
 
+    /// Returns the public key as X.509 SubjectPublicKeyInfo DER.
     pub fn public_key(&self) -> &[u8] {
         &self.public_key
     }
@@ -97,7 +98,12 @@ pub fn derive_recovery_key_pair(
 
             Ok(RecoveryKeyPair {
                 private_key: *private_key,
-                public_key: signer.verifying_key().to_bytes().to_vec(),
+                public_key: signer
+                    .verifying_key()
+                    .to_public_key_der()
+                    .map_err(|_| MnemonicError::DerivationFailed)?
+                    .as_bytes()
+                    .to_vec(),
             })
         }
         RecoveryKeyAlgorithm::P256Ecdsa => {
@@ -115,7 +121,8 @@ pub fn derive_recovery_key_pair(
                         private_key: *private_key,
                         public_key: signer
                             .verifying_key()
-                            .to_sec1_point(false)
+                            .to_public_key_der()
+                            .map_err(|_| MnemonicError::DerivationFailed)?
                             .as_bytes()
                             .to_vec(),
                     });

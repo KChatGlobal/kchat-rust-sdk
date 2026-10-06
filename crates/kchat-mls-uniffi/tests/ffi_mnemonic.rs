@@ -22,12 +22,14 @@ fn exposes_versioned_recovery_bytes_without_an_mls_provider() {
     );
     assert_eq!(
         pair.public_key,
-        bytes("e91441a2e27aae26a5a1c4a79057a15cf11eeafde63f08c803c20558c3cfe007")
+        bytes(
+            "302a300506032b6570032100e91441a2e27aae26a5a1c4a79057a15cf11eeafde63f08c803c20558c3cfe007"
+        )
     );
 }
 
 #[test]
-fn exports_p256_ecdsa_as_raw_scalar_and_uncompressed_sec1_public_key() {
+fn exports_p256_ecdsa_as_raw_scalar_and_spki_der_public_key() {
     let pair =
         derive_recovery_key_pair(PHRASE.to_owned(), RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
     assert_eq!(pair.format_version, 1);
@@ -36,12 +38,11 @@ fn exports_p256_ecdsa_as_raw_scalar_and_uncompressed_sec1_public_key() {
         pair.private_key,
         bytes("77ed7a856a5ae22bc5bd3d6ca29db7093ebdf26f1c8508f1aae6ddba3f32fbb1")
     );
-    assert_eq!(pair.public_key.len(), 65);
-    assert_eq!(pair.public_key[0], 0x04);
+    assert_eq!(pair.public_key.len(), 91);
     assert_eq!(
         pair.public_key,
         bytes(
-            "04c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a"
+            "3059301306072a8648ce3d020106082a8648ce3d03010703420004c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a"
         )
     );
     let ed25519 =
@@ -66,9 +67,9 @@ fn recovers_generated_phrase_through_native_api() {
             assert_eq!(
                 original.public_key.len(),
                 if algorithm == RecoveryKeyAlgorithm::Ed25519 {
-                    32
+                    44
                 } else {
-                    65
+                    91
                 }
             );
         }

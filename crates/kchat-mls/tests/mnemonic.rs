@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey, pkcs8::DecodePublicKey as _};
 use kchat_mls::mnemonic::{
     MnemonicError, RecoveryKeyAlgorithm, derive_recovery_key_pair, generate_recovery_mnemonic,
 };
@@ -15,6 +15,24 @@ fn bytes(hex: &str) -> [u8; 32] {
 }
 
 #[test]
+fn exports_spki_der_public_keys_for_auth_go() {
+    let ed = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::Ed25519).unwrap();
+    assert_eq!(
+        ed.public_key(),
+        bytes_any(
+            "302a300506032b6570032100e91441a2e27aae26a5a1c4a79057a15cf11eeafde63f08c803c20558c3cfe007"
+        )
+    );
+    let p256 = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
+    assert_eq!(
+        p256.public_key(),
+        bytes_any(
+            "3059301306072a8648ce3d020106082a8648ce3d03010703420004c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a"
+        )
+    );
+}
+
+#[test]
 fn derives_recovery_pair_from_mnemonic_without_user_id() {
     let ed = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::Ed25519).unwrap();
     assert_eq!(
@@ -22,7 +40,9 @@ fn derives_recovery_pair_from_mnemonic_without_user_id() {
         bytes("ff5ff68d317dbac80476dd3d86edbded67928661695ddbcb0b4b73f5eac93530")
     );
     assert_eq!(
-        ed.public_key(),
+        VerifyingKey::from_public_key_der(ed.public_key())
+            .unwrap()
+            .to_bytes(),
         bytes("e91441a2e27aae26a5a1c4a79057a15cf11eeafde63f08c803c20558c3cfe007")
     );
 
@@ -32,7 +52,10 @@ fn derives_recovery_pair_from_mnemonic_without_user_id() {
         bytes("77ed7a856a5ae22bc5bd3d6ca29db7093ebdf26f1c8508f1aae6ddba3f32fbb1")
     );
     assert_eq!(
-        p256.public_key(),
+        P256VerifyingKey::from_public_key_der(p256.public_key())
+            .unwrap()
+            .to_sec1_point(false)
+            .as_bytes(),
         bytes_any(
             "04c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a"
         )
@@ -65,9 +88,19 @@ fn matches_independent_recovery_vectors_and_can_sign() {
     for (mnemonic, private_key, public_key) in vectors {
         let pair = derive_recovery_key_pair(mnemonic, RecoveryKeyAlgorithm::Ed25519).unwrap();
         assert_eq!(pair.export_private_key(), bytes(private_key));
-        assert_eq!(pair.public_key(), bytes(public_key));
+        assert_eq!(
+            VerifyingKey::from_public_key_der(pair.public_key())
+                .unwrap()
+                .to_bytes(),
+            bytes(public_key)
+        );
         let signer = SigningKey::from_bytes(&pair.export_private_key());
-        assert_eq!(signer.verifying_key().to_bytes(), pair.public_key());
+        assert_eq!(
+            signer.verifying_key().to_bytes(),
+            VerifyingKey::from_public_key_der(pair.public_key())
+                .unwrap()
+                .to_bytes()
+        );
         let message = b"recovery proof";
         let signature = signer.sign(message);
         signer
@@ -93,11 +126,13 @@ fn derives_p256_ecdsa_with_independent_sec1_vectors_and_signs() {
         bytes("77ed7a856a5ae22bc5bd3d6ca29db7093ebdf26f1c8508f1aae6ddba3f32fbb1")
     );
     let expected_public = "04c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a";
-    assert_eq!(pair.public_key().len(), 65);
-    assert_eq!(pair.public_key()[0], 0x04);
-    assert_eq!(pair.public_key(), bytes_any(expected_public));
+    assert_eq!(pair.public_key().len(), 91);
+    let verifier = P256VerifyingKey::from_public_key_der(pair.public_key()).unwrap();
+    assert_eq!(
+        verifier.to_sec1_point(false).as_bytes(),
+        bytes_any(expected_public)
+    );
     let signer = P256SigningKey::from_slice(&pair.export_private_key()).unwrap();
-    let verifier = P256VerifyingKey::from_sec1_bytes(pair.public_key()).unwrap();
     let signature: P256Signature = signer.sign(b"recovery proof");
     verifier.verify(b"recovery proof", &signature).unwrap();
     assert!(verifier.verify(b"other proof", &signature).is_err());
@@ -109,7 +144,10 @@ fn derives_p256_ecdsa_with_independent_sec1_vectors_and_signs() {
         bytes("ad839e943124df53b1c4ebcd1032969c0f76eef59375acd1733fb0a354a71de7")
     );
     assert_eq!(
-        other.public_key(),
+        P256VerifyingKey::from_public_key_der(other.public_key())
+            .unwrap()
+            .to_sec1_point(false)
+            .as_bytes(),
         bytes_any(
             "049c510f45212cb231ad8df8f53b94c970428f1e00784134dbdf57787dad4e2b4f1ebf446f096bd34f03c178361cd68faab5985a32c453587704a60cb8c2ac19e0"
         )

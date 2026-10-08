@@ -1,5 +1,6 @@
 use mls_mobile_sdk_rs::mnemonic::{
-    MnemonicFfiError, RecoveryKeyAlgorithm, derive_recovery_key_pair, generate_recovery_mnemonic,
+    MnemonicFfiError, RecoveryKeyAlgorithm, RecoverySignatureFfiError, derive_recovery_key_pair,
+    generate_recovery_mnemonic, sign_recovery_message, verify_recovery_signature,
 };
 
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
@@ -95,5 +96,45 @@ fn maps_redacted_input_errors() {
     assert_eq!(
         MnemonicFfiError::InvalidMnemonic.to_string(),
         "invalid recovery mnemonic"
+    );
+}
+
+#[test]
+fn signs_and_verifies_recovery_challenges_through_ffi() {
+    for algorithm in [
+        RecoveryKeyAlgorithm::Ed25519,
+        RecoveryKeyAlgorithm::P256Ecdsa,
+    ] {
+        let pair = derive_recovery_key_pair(PHRASE.to_owned(), algorithm).unwrap();
+        let signature =
+            sign_recovery_message(algorithm, pair.private_key.clone(), b"challenge".to_vec())
+                .unwrap();
+        assert!(
+            verify_recovery_signature(
+                algorithm,
+                pair.public_key.clone(),
+                b"challenge".to_vec(),
+                signature.clone()
+            )
+            .unwrap()
+        );
+        assert!(
+            !verify_recovery_signature(algorithm, pair.public_key, b"other".to_vec(), signature)
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        sign_recovery_message(RecoveryKeyAlgorithm::P256Ecdsa, vec![0; 32], vec![]),
+        Err(RecoverySignatureFfiError::InvalidPrivateKey)
+    );
+    let ed = derive_recovery_key_pair(PHRASE.to_owned(), RecoveryKeyAlgorithm::Ed25519).unwrap();
+    assert_eq!(
+        verify_recovery_signature(
+            RecoveryKeyAlgorithm::P256Ecdsa,
+            ed.public_key,
+            b"challenge".to_vec(),
+            vec![0; 64],
+        ),
+        Err(RecoverySignatureFfiError::InvalidPublicKey)
     );
 }

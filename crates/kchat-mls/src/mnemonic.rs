@@ -1,7 +1,13 @@
 use bip39::{Language, Mnemonic};
-use ed25519_dalek::{SigningKey, pkcs8::EncodePublicKey as _};
+use ed25519_dalek::{
+    Signature as Ed25519Signature, SigningKey, VerifyingKey,
+    pkcs8::{DecodePublicKey as _, EncodePublicKey as _},
+};
 use hkdf::Hkdf;
-use p256::ecdsa::SigningKey as P256SigningKey;
+use p256::ecdsa::{
+    Signature as P256Signature, SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey,
+    signature::{Signer as _, Verifier as _},
+};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -25,6 +31,14 @@ pub enum MnemonicError {
     RandomnessUnavailable,
     #[error("recovery key derivation failed")]
     DerivationFailed,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum RecoverySignatureError {
+    #[error("invalid recovery private key")]
+    InvalidPrivateKey,
+    #[error("invalid recovery public key")]
+    InvalidPublicKey,
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -129,6 +143,58 @@ pub fn derive_recovery_key_pair(
                 }
             }
             Err(MnemonicError::DerivationFailed)
+        }
+    }
+}
+
+pub fn sign_recovery_message(
+    algorithm: RecoveryKeyAlgorithm,
+    private_key: &[u8],
+    message: &[u8],
+) -> Result<Vec<u8>, RecoverySignatureError> {
+    match algorithm {
+        RecoveryKeyAlgorithm::Ed25519 => {
+            let private_key: &[u8; 32] = private_key
+                .try_into()
+                .map_err(|_| RecoverySignatureError::InvalidPrivateKey)?;
+            let signer = SigningKey::from_bytes(private_key);
+            let signature: Ed25519Signature = signer.sign(message);
+            Ok(signature.to_bytes().to_vec())
+        }
+        RecoveryKeyAlgorithm::P256Ecdsa => {
+            if private_key.len() != 32 {
+                return Err(RecoverySignatureError::InvalidPrivateKey);
+            }
+            let signer = P256SigningKey::from_slice(private_key)
+                .map_err(|_| RecoverySignatureError::InvalidPrivateKey)?;
+            let signature: P256Signature = signer.sign(message);
+            Ok(signature.to_der().as_bytes().to_vec())
+        }
+    }
+}
+
+pub fn verify_recovery_signature(
+    algorithm: RecoveryKeyAlgorithm,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, RecoverySignatureError> {
+    match algorithm {
+        RecoveryKeyAlgorithm::Ed25519 => {
+            let verifier = VerifyingKey::from_public_key_der(public_key)
+                .map_err(|_| RecoverySignatureError::InvalidPublicKey)?;
+            let Ok(signature) = Ed25519Signature::from_slice(signature) else {
+                return Ok(false);
+            };
+            Ok(verifier.verify_strict(message, &signature).is_ok())
+        }
+        RecoveryKeyAlgorithm::P256Ecdsa => {
+            let verifier = P256VerifyingKey::from_public_key_der(public_key)
+                .map_err(|_| RecoverySignatureError::InvalidPublicKey)?;
+            let Ok(signature) = P256Signature::from_der(signature) else {
+                return Ok(false);
+            };
+            Ok(verifier.verify(message, &signature).is_ok())
         }
     }
 }

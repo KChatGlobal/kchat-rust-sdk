@@ -1,11 +1,13 @@
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey, pkcs8::DecodePublicKey as _};
 use kchat_mls::mnemonic::{
-    MnemonicError, RecoveryKeyAlgorithm, derive_recovery_key_pair, generate_recovery_mnemonic,
+    MnemonicError, RecoveryKeyAlgorithm, RecoverySignatureError, derive_recovery_key_pair,
+    generate_recovery_mnemonic, sign_recovery_message, verify_recovery_signature,
 };
 use p256::ecdsa::{
     Signature as P256Signature, SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey,
-    signature::Verifier as _,
+    signature::{Verifier as _, hazmat::PrehashVerifier as _},
 };
+use sha2::{Digest as _, Sha256};
 
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
@@ -29,6 +31,94 @@ fn exports_spki_der_public_keys_for_auth_go() {
         bytes_any(
             "3059301306072a8648ce3d020106082a8648ce3d03010703420004c87f59bc53882f9cba411786b871c49fa4c521f679ad9ba441d689b81cb9ba39ed0fdfa451d13811df4270ab2bd942c4922777c7381c7ac56db944b81d90bc1a"
         )
+    );
+}
+
+#[test]
+fn signs_and_verifies_recovery_messages_in_auth_go_formats() {
+    let message = b"recovery challenge";
+    for algorithm in [
+        RecoveryKeyAlgorithm::Ed25519,
+        RecoveryKeyAlgorithm::P256Ecdsa,
+    ] {
+        let pair = derive_recovery_key_pair(PHRASE, algorithm).unwrap();
+        let signature =
+            sign_recovery_message(algorithm, &pair.export_private_key(), message).unwrap();
+        assert!(
+            verify_recovery_signature(algorithm, pair.public_key(), message, &signature).unwrap()
+        );
+        assert!(
+            !verify_recovery_signature(
+                algorithm,
+                pair.public_key(),
+                b"wrong challenge",
+                &signature
+            )
+            .unwrap()
+        );
+        if algorithm == RecoveryKeyAlgorithm::Ed25519 {
+            assert_eq!(signature.len(), 64);
+        } else {
+            let verifier = P256VerifyingKey::from_public_key_der(pair.public_key()).unwrap();
+            let parsed = P256Signature::from_der(&signature).unwrap();
+            verifier
+                .verify_prehash(&Sha256::digest(message), &parsed)
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn rejects_wrong_recovery_keys_and_malformed_signatures() {
+    let ed = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::Ed25519).unwrap();
+    let p256 = derive_recovery_key_pair(PHRASE, RecoveryKeyAlgorithm::P256Ecdsa).unwrap();
+    assert_eq!(
+        sign_recovery_message(RecoveryKeyAlgorithm::Ed25519, &[0; 31], b"msg"),
+        Err(RecoverySignatureError::InvalidPrivateKey)
+    );
+    assert_eq!(
+        sign_recovery_message(RecoveryKeyAlgorithm::P256Ecdsa, &[0; 32], b"msg"),
+        Err(RecoverySignatureError::InvalidPrivateKey)
+    );
+    assert_eq!(
+        sign_recovery_message(RecoveryKeyAlgorithm::P256Ecdsa, &[1; 31], b"msg"),
+        Err(RecoverySignatureError::InvalidPrivateKey)
+    );
+    assert_eq!(
+        verify_recovery_signature(
+            RecoveryKeyAlgorithm::Ed25519,
+            p256.public_key(),
+            b"msg",
+            &[0; 64]
+        ),
+        Err(RecoverySignatureError::InvalidPublicKey)
+    );
+    assert_eq!(
+        verify_recovery_signature(
+            RecoveryKeyAlgorithm::P256Ecdsa,
+            ed.public_key(),
+            b"msg",
+            &[0; 64]
+        ),
+        Err(RecoverySignatureError::InvalidPublicKey)
+    );
+    assert!(
+        !verify_recovery_signature(
+            RecoveryKeyAlgorithm::Ed25519,
+            ed.public_key(),
+            b"msg",
+            &[0; 12]
+        )
+        .unwrap()
+    );
+    assert!(
+        !verify_recovery_signature(
+            RecoveryKeyAlgorithm::P256Ecdsa,
+            p256.public_key(),
+            b"msg",
+            &[0; 64]
+        )
+        .unwrap()
     );
 }
 

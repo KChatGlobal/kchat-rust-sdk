@@ -1,6 +1,6 @@
 use kchat_mobile_sdk_rs::backup::{
     BackupDescriptorBootstrap, BackupFfiError, BackupKeyMode, generate_mnemonic, generate_password,
-    import_from_raw, restore_from_mnemonic,
+    import_from_mnemonic, import_from_password, import_from_raw,
 };
 
 const ACCOUNT: &str = "00112233-4455-6677-8899-aabbccddeeff";
@@ -30,9 +30,9 @@ fn generates_a_mnemonic_with_the_requested_word_count() {
 }
 
 #[test]
-fn restores_the_same_master_key_from_a_mnemonic_phrase() {
+fn imports_the_same_master_key_from_a_mnemonic_phrase() {
     let generated = generate_mnemonic(12).unwrap();
-    let restored = restore_from_mnemonic(generated.mnemonic.clone()).unwrap();
+    let restored = import_from_mnemonic(generated.mnemonic.clone()).unwrap();
 
     assert_eq!(restored.mode(), BackupKeyMode::Mnemonic);
     assert_eq!(restored.export_raw(), generated.key.export_raw());
@@ -45,7 +45,7 @@ fn restores_the_same_master_key_from_a_mnemonic_phrase() {
 #[test]
 fn rejects_an_invalid_mnemonic_phrase() {
     assert!(matches!(
-        restore_from_mnemonic("not a valid recovery phrase".to_owned()),
+        import_from_mnemonic("not a valid recovery phrase".to_owned()),
         Err(BackupFfiError::InvalidMnemonic)
     ));
 }
@@ -80,6 +80,28 @@ fn password_generation_preserves_raw_bytes_and_seals_a_password_descriptor() {
     assert_eq!(&descriptor[..4], b"KCBD");
     assert_eq!(descriptor[6], 2);
     assert_eq!(&descriptor[10..26], generated.salt.as_slice());
+}
+
+#[test]
+fn imports_the_same_password_key_with_its_saved_salt() {
+    let password = vec![0x68, 0xc3, 0xa9];
+    let generated = generate_password(password.clone()).unwrap();
+    let imported = import_from_password(password, generated.salt.clone()).unwrap();
+
+    assert_eq!(imported.mode(), BackupKeyMode::Password);
+    assert_eq!(imported.export_raw(), generated.key.export_raw());
+    assert_eq!(
+        imported.derive_backup_id(ACCOUNT.to_owned()).unwrap(),
+        generated.key.derive_backup_id(ACCOUNT.to_owned()).unwrap(),
+    );
+}
+
+#[test]
+fn rejects_an_invalid_password_salt() {
+    assert!(matches!(
+        import_from_password(b"password".to_vec(), vec![0; 15]),
+        Err(BackupFfiError::InvalidArgument)
+    ));
 }
 
 #[test]

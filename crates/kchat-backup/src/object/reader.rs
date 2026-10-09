@@ -1,6 +1,4 @@
 //! KCBK V1 reader with bounded Zstd and opaque payloads.
-//! A ciphertext preflight precedes one decryption/decompression pass. Output is
-//! provisional until the final integrity and decompression checks succeed.
 
 use aead_stream::{DecryptorBE32, Key, Nonce, StreamBE32, aead::Payload};
 use chacha20poly1305::XChaCha20Poly1305;
@@ -13,17 +11,15 @@ use crate::{
     MAX_COMPRESSED_OBJECT_BYTES_V1, MAX_ENCRYPTED_BLOCKS_PER_OBJECT_V1, MAX_IO_CHUNK_BYTES_V1,
 };
 
-use super::compression::BoundedDecoder;
-use super::envelope::{
-    AEAD_TAG_BYTES, COMPRESSED_BLOCK_BYTES, ENVELOPE_HEADER_BYTES, ENVELOPE_VERSION, parse_header,
+use super::{
+    compression::BoundedDecoder,
+    envelope::{
+        AEAD_TAG_BYTES, COMPRESSED_BLOCK_BYTES, ENVELOPE_HEADER_BYTES, ENVELOPE_VERSION,
+        parse_header,
+    },
 };
 
-/// Expected transport metadata from a fixed committed inventory entry.
-///
-/// Keep this distinct from `BackupObjectDescriptor`, which is produced by the
-/// writer. A valid constructor only validates arguments, not object contents.
-/// Identity comes from the separately constructed `BackupObjectContextV1`.
-/// Generation/storage-version pinning remains the factory/caller's responsibility.
+/// Expected metadata from a committed inventory entry.
 #[derive(Clone, Copy)]
 pub struct ExpectedBackupObjectV1 {
     ciphertext_size: u64,
@@ -42,7 +38,6 @@ impl ExpectedBackupObjectV1 {
         if ciphertext_size > MAX_CIPHERTEXT_OBJECT_BYTES_V1 {
             return Err(BackupError::resource_limit_exceeded());
         }
-        // Even an envelope with an empty FINAL needs header + length + tag.
         if ciphertext_size < (ENVELOPE_HEADER_BYTES + 4 + AEAD_TAG_BYTES) as u64 {
             return Err(BackupError::invalid_argument());
         }
@@ -62,13 +57,7 @@ impl From<BackupObjectDescriptor> for ExpectedBackupObjectV1 {
     }
 }
 
-/// Verify only transport integrity and the encrypted envelope; discard the
-/// authenticated compressed bytes. Success does NOT validate Zstd or records.
-///
-/// Pass 1: hash/count ciphertext to exact EOF before doing any decryption.
-/// Pass 2: reopen, authenticate all blocks and recheck the same hash/count.
-/// SHA-256 is an inventory comparison, not a keyed authenticity check. AEAD is
-/// still required even if an attacker can replace both the bytes and their hash.
+/// Verify ciphertext integrity and AEAD; skip Zstd and payload validation.
 pub fn verify_object_envelope_v1(
     context: &BackupObjectContextV1,
     factory: &mut dyn BackupByteSourceFactory,
@@ -80,16 +69,8 @@ pub fn verify_object_envelope_v1(
     input.finish()
 }
 
-/// Preflight ciphertext integrity, then decrypt/decompress opaque plaintext into
-/// `sink` in one pass. No payload schema is interpreted or validated.
-/// Requires two opens: ciphertext preflight, then streaming verification/output.
-/// Each frame must pass AEAD authentication before decompression and output.
-///
-/// Output is provisional until this function returns `Ok(())`: a changed source,
-/// late authentication/decompression/integrity error, I/O failure or cancellation
-/// can leave bytes in the sink, including bytes from a different valid object.
-/// Write to fresh staging, discard it on any error, and activate it only after
-/// this function and the whole restore succeed. Writes are not atomic.
+/// Preflight ciphertext, then decrypt and decompress it without parsing payloads.
+/// Output is provisional; discard staged bytes on any error.
 pub fn open_object_v1(
     context: &BackupObjectContextV1,
     factory: &mut dyn BackupByteSourceFactory,
@@ -145,9 +126,6 @@ fn check_factory_cancelled(factory: &dyn BackupByteSourceFactory) -> Result<(), 
     }
 }
 
-/// Counts/hashes every byte actually consumed, including the header and lengths.
-/// Never allocate based on an untrusted wire length. Probe one byte beyond the
-/// expected size so `take(expected_size)` cannot hide trailing data.
 struct CheckedSource<'a> {
     source: Box<dyn BackupByteSource>,
     factory: &'a dyn BackupByteSourceFactory,
@@ -221,8 +199,6 @@ impl<'a> CheckedSource<'a> {
         Ok(())
     }
 
-    /// Zero bytes at a frame boundary means EOF. One to three bytes of a length
-    /// means truncation, never EOF. Short callback reads do not imply truncation.
     fn next_length(&mut self) -> Result<Option<usize>, BackupError> {
         let mut length = [0; 4];
         if self.read(&mut length[..1])? == 0 {
@@ -242,7 +218,6 @@ impl<'a> CheckedSource<'a> {
             return Err(BackupError::from_code(BackupErrorCode::IntegrityMismatch));
         }
         let digest: [u8; 32] = self.hash.finalize().into();
-        // These hashes are public inventory metadata, not secret authenticators.
         if digest != self.expected.ciphertext_sha256 {
             return Err(BackupError::from_code(BackupErrorCode::IntegrityMismatch));
         }
@@ -272,8 +247,6 @@ fn authenticate_envelope(
     let mut length = input
         .next_length()?
         .ok_or_else(|| BackupError::from_code(BackupErrorCode::MalformedObject))?;
-    // One bounded ciphertext frame, one library-produced plaintext block, and
-    // a 4-byte lookahead. Never buffer the entire compressed or plaintext object.
     let mut frame = vec![0; COMPRESSED_BLOCK_BYTES + AEAD_TAG_BYTES];
     let mut blocks = 0_u64;
     let mut compressed_bytes = 0_u64;
@@ -284,9 +257,6 @@ fn authenticate_envelope(
         }
         input.read_exact(&mut frame[..length])?;
         let next = input.next_length()?;
-        // NEXT/FINAL is implicit in the STREAM nonce. EOF only identifies a
-        // final CANDIDATE; decrypt_last must authenticate the final flag as well.
-        // Cutting at a NEXT boundary or appending after FINAL fails authentication.
         if next.is_some() && length != COMPRESSED_BLOCK_BYTES + AEAD_TAG_BYTES {
             return Err(BackupError::from_code(BackupErrorCode::MalformedObject));
         }

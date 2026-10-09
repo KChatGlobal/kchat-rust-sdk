@@ -1,6 +1,3 @@
-//! Executable malformed fixtures for the reader foundation. Expected hashes are
-//! intentionally recomputed for malformed envelopes so tests reach the parser/
-//! AEAD layer rather than stopping at the inventory check every time.
 use std::{
     collections::VecDeque,
     sync::{
@@ -173,7 +170,6 @@ fn verifies_writer_output_with_empty_small_and_multiblock_payloads() {
     ] {
         let bytes = seal(&payload);
         let mut factory = Factory::new(&bytes);
-        // Exercise short reads across header, length prefixes, data and tags.
         factory.max_read = 7;
         verify_object_envelope_v1(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
             .unwrap();
@@ -592,8 +588,6 @@ fn valid_replacement_is_rejected_at_completion_even_after_output() {
     )
     .unwrap_err();
     assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
-    // AEAD is valid, but these bytes don't belong to the expected object. The
-    // caller must discard staging on error rather than committing the output.
     assert_eq!(staging.0, b"payload-B");
     assert_eq!(factory.opens, 2);
     assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);

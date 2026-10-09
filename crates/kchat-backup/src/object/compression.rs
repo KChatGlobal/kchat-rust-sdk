@@ -1,6 +1,4 @@
-//! Strict single-frame Zstd decoding. Envelope/AEAD validity alone is insufficient:
-//! this layer also requires a complete standard frame and no dictionary, second
-//! frame, skippable frame or trailing bytes. It accepts the existing V1 writer.
+//! Bounded, single-frame Zstd decoding without dictionaries or trailing bytes.
 
 use zeroize::Zeroizing;
 use zstd::stream::raw::{DParameter, Decoder, Operation};
@@ -27,8 +25,7 @@ fn invalid() -> BackupError {
 impl BoundedDecoder {
     pub(super) fn new() -> Result<Self, BackupError> {
         let mut decoder = Decoder::new().map_err(|_| BackupError::io_error())?;
-        // Set BEFORE processing input: do not let the library allocate an
-        // attacker-requested large history window and only check afterwards.
+        // Limit the window before decoding untrusted input.
         decoder
             .set_parameter(DParameter::WindowLogMax(MAX_ZSTD_WINDOW_BYTES_V1.ilog2()))
             .map_err(|_| BackupError::invalid_state())?;
@@ -43,9 +40,6 @@ impl BoundedDecoder {
         })
     }
 
-    /// `emit` discards bytes during validation or writes them during streaming open.
-    /// It must consume the borrowed slice synchronously. Cancellation
-    /// is checked on every decoder iteration, even for highly compressible input.
     pub(super) fn push(
         &mut self,
         mut bytes: &[u8],
@@ -82,8 +76,7 @@ impl BoundedDecoder {
         }
         loop {
             cancelled()?;
-            // Allow a one-byte probe over the remaining quota to distinguish
-            // an exact-limit frame from a bomb. Never forward the excess byte.
+            // Probe one byte past the limit without emitting it.
             let capacity = self
                 .output
                 .len()
@@ -118,8 +111,6 @@ impl BoundedDecoder {
                     Err(invalid())
                 };
             }
-            // Empty input may still flush a full decoder output buffer. Keep
-            // draining until no progress; finish() will require frame completion.
         }
     }
 
@@ -132,10 +123,6 @@ impl BoundedDecoder {
     }
 }
 
-/// Inspect the small standard Zstd header before the decoder sees it. The window
-/// descriptor covers non-single-segment frames; single-segment frames use the
-/// content size as their window. This also rejects large known plaintext sizes
-/// early. The decoder remains responsible for actual blocks/checksum validation.
 fn check_header(header: &[u8]) -> Result<bool, BackupError> {
     if header.len() < 5 {
         return Ok(false);
@@ -146,7 +133,7 @@ fn check_header(header: &[u8]) -> Result<bool, BackupError> {
     let descriptor = header[4];
     if descriptor & 0x1b != 0 {
         return Err(invalid());
-    } // reserved/unused bits + dictionary flag
+    }
     let single = descriptor & 0x20 != 0;
     let size_bytes = match descriptor >> 6 {
         0 if single => 1,

@@ -10,10 +10,7 @@
 //!     ciphertext_len: u32
 //!     ciphertext: [u8; ciphertext_len]
 //!
-//! Counter and FINAL flag are implicit: STREAM builds a 24-byte nonce from
-//! prefix[19] || counter:u32-be || final:u8. They are NOT serialized per frame.
-//! The current writer emits full NEXT frames and one shorter FINAL frame,
-//! including a tag-only FINAL when compressed size is a multiple of 64 KiB.
+//! Nonce suffix: counter:u32-be || final:u8 (implicit per frame).
 
 pub(crate) const ENVELOPE_MAGIC: &[u8; 4] = b"KCBK";
 pub(crate) const ENVELOPE_VERSION: u16 = 1;
@@ -24,8 +21,7 @@ pub(crate) const STREAM_NONCE_PREFIX_BYTES: usize = 19;
 pub(crate) const COMPRESSED_BLOCK_BYTES: usize = 64 * 1024;
 pub(crate) const AEAD_TAG_BYTES: usize = 16;
 
-/// Parse only the fixed header. Recognizing a header does not authenticate it:
-/// the caller must still check inventory hash, context and every AEAD tag.
+/// Parse the unauthenticated fixed header.
 pub(crate) fn parse_header(
     header: &[u8; ENVELOPE_HEADER_BYTES],
 ) -> Result<[u8; STREAM_NONCE_PREFIX_BYTES], crate::BackupError> {

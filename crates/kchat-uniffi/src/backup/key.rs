@@ -59,7 +59,6 @@ pub fn generate_mnemonic(word_count: u32) -> Result<GeneratedMnemonicBackupKey, 
     })
 }
 
-/// Import a mnemonic key. Callers must protect JVM strings separately.
 #[uniffi::export]
 pub fn import_from_mnemonic(
     mut mnemonic_phrase: String,

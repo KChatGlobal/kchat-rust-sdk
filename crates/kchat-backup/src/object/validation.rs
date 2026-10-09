@@ -1,5 +1,4 @@
-//! Full-object envelope, integrity and bounded decompression validation.
-//! Payload bytes are opaque; schema validation belongs to the application.
+//! Validates object integrity and compression without parsing payloads.
 
 use super::reader::validate_payload_v1;
 use crate::{
@@ -11,18 +10,12 @@ use crate::{
 pub enum BackupValidationState {
     Ready,
     Running,
-    /// Envelope, decompression, inventory all succeeded.
     Completed,
     Failed,
     Cancelled,
 }
 
-/// One validation attempt per instance; all terminal states reject reuse.
-///
-/// This synchronous core owns no worker threads. During `validate`, cancellation
-/// comes from the factory/source flags, checked around callback boundaries.
-/// Dropping the validator releases its state; opened source handles are local to
-/// the verification pass and are dropped on both success and failure.
+/// Allows one validation attempt per instance.
 pub struct BackupObjectValidatorV1 {
     state: BackupValidationState,
 }
@@ -44,7 +37,7 @@ impl BackupObjectValidatorV1 {
         self.state
     }
 
-    /// Cancel before starting. To cancel a running call, signal its factory/source.
+    /// Cancel before validation starts.
     pub fn cancel(&mut self) -> Result<(), BackupError> {
         if self.state != BackupValidationState::Ready {
             return Err(BackupError::invalid_state());
@@ -53,7 +46,6 @@ impl BackupObjectValidatorV1 {
         Ok(())
     }
 
-    /// Validate the envelope, integrity and compression without an output sink.
     pub fn validate(
         &mut self,
         context: &BackupObjectContextV1,

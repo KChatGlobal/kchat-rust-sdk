@@ -46,7 +46,7 @@ impl BackupCiphertextSource for CiphertextSource {
         let mut offset = self.offset.lock().unwrap();
         let count = (self.bytes.len() - *offset)
             .min(maximum_bytes as usize)
-            .min(7); // Exercise short foreign callback reads.
+            .min(7);
         let bytes = self.bytes[*offset..*offset + count].to_vec();
         *offset += count;
         Ok(bytes)

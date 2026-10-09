@@ -1,8 +1,7 @@
 use crate::{BackupError, MAX_IO_CHUNK_BYTES_V1, MAX_PLAINTEXT_OBJECT_BYTES_V1};
 
 pub trait BackupByteSource {
-    /// Fill at most `destination.len()` bytes. Short reads are allowed; zero means
-    /// permanent EOF, never "temporarily unavailable". Propagate I/O failures.
+    /// Short reads are allowed; zero means permanent EOF.
     fn read_chunk(&mut self, destination: &mut [u8]) -> Result<usize, BackupError>;
 
     /// Returns whether the caller has cancelled the active operation.
@@ -11,24 +10,12 @@ pub trait BackupByteSource {
     }
 }
 
-/// Reopens ONE exact committed ciphertext object at offset zero.
-///
-/// The caller owns storage/network policy. Every opened source must refer to the
-/// same immutable storage version, not a mutable "latest" URL. The reader also
-/// checks size/hash before decryption, then rechecks them at the end of the second
-/// pass. Decryption and decompression run once, during that second pass. Output
-/// is provisional until the entire call succeeds: a changed stream or a late
-/// validation failure can leave bytes in the sink. Discard staging on any error.
-///
-/// Sources own their callback/file handles and release them on drop. No seek,
-/// file path, HTTP client or async runtime is imposed by the core. Callbacks are
-/// synchronous: their return provides backpressure. Run on a worker thread and
-/// make blocking callbacks interruptible; cancellation cannot preempt a callback.
+/// Opens the same immutable ciphertext from offset zero on each pass.
+/// Calls are synchronous; callers must unblock I/O to cancel it.
 pub trait BackupByteSourceFactory {
     fn open(&mut self) -> Result<Box<dyn BackupByteSource>, BackupError>;
 
-    /// Share a cancellation flag with all opened sources. The core checks this
-    /// before/after opening and reading; the caller must unblock pending I/O.
+    /// Share cancellation with opened sources.
     fn is_cancelled(&self) -> bool {
         false
     }

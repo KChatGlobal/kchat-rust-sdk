@@ -59,11 +59,9 @@ pub fn generate_mnemonic(word_count: u32) -> Result<GeneratedMnemonicBackupKey, 
     })
 }
 
-/// Reconstruct the same mnemonic-mode master key from a recovery phrase.
-/// The Rust-owned string is wiped after derivation; callers must still protect
-/// their Kotlin String, which the JVM cannot reliably zeroize.
+/// Import a mnemonic key. Callers must protect JVM strings separately.
 #[uniffi::export]
-pub fn restore_from_mnemonic(
+pub fn import_from_mnemonic(
     mut mnemonic_phrase: String,
 ) -> Result<Arc<BackupMasterKey>, BackupFfiError> {
     let result = MnemonicBackupKey::from_mnemonic(&mnemonic_phrase);
@@ -71,6 +69,24 @@ pub fn restore_from_mnemonic(
     let key = result?;
     Ok(Arc::new(BackupMasterKey {
         key: CoreBackupMasterKey::Mnemonic(key),
+    }))
+}
+
+#[uniffi::export]
+pub fn import_from_password(
+    mut password_raw_utf8: Vec<u8>,
+    salt: Vec<u8>,
+) -> Result<Arc<BackupMasterKey>, BackupFfiError> {
+    let result = match exact_array(salt) {
+        Ok(salt) => {
+            PasswordBackupKey::from_password(&password_raw_utf8, salt).map_err(BackupFfiError::from)
+        }
+        Err(error) => Err(error),
+    };
+    password_raw_utf8.zeroize();
+    let key = result?;
+    Ok(Arc::new(BackupMasterKey {
+        key: CoreBackupMasterKey::Password(key),
     }))
 }
 

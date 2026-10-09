@@ -1,8 +1,4 @@
-//! Bounded Kotlin/Swift callbacks for the verified backup reader.
-//!
-//! Each factory open must return a fresh handle at offset zero for the same
-//! committed ciphertext object. The core reads it twice, decrypting/decompressing
-//! once into provisional staging. Callback failures are sanitized to `IoError`.
+//! Kotlin/Swift callbacks for the verified backup reader.
 
 use std::sync::{
     Arc,
@@ -17,8 +13,7 @@ use zeroize::Zeroizing;
 
 use super::{BackupFfiError, BackupMasterKey, BackupObjectMetadata};
 
-/// Open the same immutable ciphertext version anew on every call. Each source
-/// must start at byte zero; no seek or platform-specific file API is imposed.
+/// Open the same immutable ciphertext from offset zero on each call.
 #[uniffi::export(with_foreign)]
 pub trait BackupCiphertextSourceFactory: Send + Sync {
     fn open(&self) -> Result<Arc<dyn BackupCiphertextSource>, BackupFfiError>;
@@ -27,26 +22,20 @@ pub trait BackupCiphertextSourceFactory: Send + Sync {
 
 #[uniffi::export(with_foreign)]
 pub trait BackupCiphertextSource: Send + Sync {
-    /// An empty array means permanent EOF, not a temporary lack of data.
+    /// An empty array means permanent EOF.
     fn read_chunk(&self, maximum_bytes: u32) -> Result<Vec<u8>, BackupFfiError>;
     fn is_cancelled(&self) -> Result<bool, BackupFfiError>;
-    /// Called once when a reader pass ends, including after a read error.
-    /// Cleanup failures cannot replace the primary restore result.
+    /// Called after each pass, including failed reads.
     fn release_stream(&self) -> Result<(), BackupFfiError>;
 }
 
-/// Receives provisional opaque plaintext from AEAD-authenticated frames.
-/// Final integrity/decompression checks can fail after output has started;
-/// callers must discard staging on any error and activate only after full restore.
-/// Schema validation is outside the SDK.
+/// Receives provisional plaintext; discard it if restore fails.
 #[uniffi::export(with_foreign)]
 pub trait BackupPlaintextSink: Send + Sync {
     fn write_chunk(&self, bytes: Vec<u8>) -> Result<(), BackupFfiError>;
 }
 
-/// Derive the backup ID and object context, then decrypt/decompress one object.
-/// The backup ID is derived from the key/account; no inventory backup ID is compared.
-/// Output is provisional: discard staging on any error.
+/// Derive context and open one object into provisional staging.
 #[uniffi::export]
 pub fn open_backup_object_v1(
     key: Arc<BackupMasterKey>,
@@ -80,8 +69,7 @@ pub fn open_backup_object_v1(
         &expected,
         &mut sink_adapter,
     );
-    // A failed cancellation callback looks like cancellation to the synchronous
-    // core. Report it as I/O instead of implying the user cancelled the restore.
+    // Report cancellation callback failures as I/O errors.
     if callback_failed.load(Ordering::Relaxed) {
         return Err(BackupFfiError::IoError);
     }
@@ -117,8 +105,6 @@ struct SourceAdapter {
 
 impl Drop for SourceAdapter {
     fn drop(&mut self) {
-        // Every pass owns a fresh source. This hook lets Kotlin close a file or
-        // HTTP response deterministically even if validation aborts early.
         let _ = self.source.release_stream();
     }
 }

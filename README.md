@@ -8,20 +8,24 @@ A Cargo workspace containing the Rust SDK that powers the [Messaging Layer Secur
 
 ## Workspace Layout
 
-The workspace is composed of five crates under `crates/`:
+The workspace is composed of crates under `crates/`:
 
 - **`kchat-storage-provider`** — SQLite-backed implementation of the OpenMLS `StorageProvider` trait. Uses `rusqlite` with `r2d2` connection pooling and `refinery` migrations (see `crates/kchat-storage-provider/migrations`).
+- **`kchat-backup`** — encrypted-backup core: typed key derivation, `KCBD` descriptors, and bounded encrypted object writing.
+- **`kchat-uniffi`** — unified Swift/Kotlin bindings for MLS and backup, producing `kchat_mobile_sdk_rs`.
 - **`uq-openmls`** — Thin wrapper around OpenMLS exposing the core MLS primitives (group creation, welcome processing, proposal/commit handling, fork resolution) used by KChat. Also wires the SQLite storage provider into an `OpenMlsProvider`.
 - **`kchat-mls`** — High-level KChat MLS logic on top of `uq-openmls`: group lifecycle management, batch message processing, group-status persistence, and tree-hash bookkeeping.
-- **`kchat-mls-uniffi`** — [UniFFI](https://mozilla.github.io/uniffi-rs/) bindings that produce a Swift package and Kotlin/Android JNI libraries from `kchat-mls`. Crate type: `staticlib`, `cdylib`, `lib`.
+- **`kchat-mls-uniffi`** — unchanged legacy Swift/Kotlin MLS bindings for existing clients, producing `mls_mobile_sdk_rs`.
 - **`kchat-mls-napi`** — [NAPI-RS](https://napi.rs/) bindings that expose `kchat-mls` to Node.js as a native addon (`@kchat/mls-napi`).
 
 Dependency graph:
 
 ```
-kchat-mls-uniffi ─┐
-                  ├─► kchat-mls ─► uq-openmls ─► kchat-storage-provider ─► OpenMLS
-kchat-mls-napi  ─┘
+kchat-uniffi ───────► kchat-backup
+       │
+       └──────────┐
+kchat-mls-uniffi ──┼─► kchat-mls ─► uq-openmls ─► kchat-storage-provider
+kchat-mls-napi ────┘                    └───────► OpenMLS
 ```
 
 ## About KChat
@@ -64,7 +68,25 @@ Run the test suite:
 cargo test --workspace
 ```
 
-## Mobile Bindings (`kchat-mls-uniffi`)
+## Unified Mobile Bindings (`kchat-uniffi`)
+
+New clients can use one native library for MLS and backup through Kotlin package `com.kchat.sdk`
+and Swift FFI module `KChatRustFramework`. Source and integration tests are organized into `backup/` and `mls/` domains.
+The existing `kchat-mls-uniffi` crate and its build scripts remain available without changes.
+
+From the repository root:
+
+```sh
+cargo build -p kchat-uniffi
+scripts/kchat_uniffi_build_android.sh
+cargo test -p kchat-uniffi --all-features -- --test-threads=1
+```
+
+The Android script generates Kotlin and JNI libraries for `arm64-v8a` and `x86_64` under
+`crates/kchat-uniffi/android/`. See [the crate README](crates/kchat-uniffi/README.md) for API scope,
+artifact paths and Swift generation. Backup restore/reader APIs are not exposed by this binding yet.
+
+## Legacy Mobile Bindings (`kchat-mls-uniffi`)
 
 The `kchat-mls-uniffi` crate produces a `mls_mobile_sdk_rs` library plus a `uniffi-bindgen` binary used to generate foreign-language bindings.
 

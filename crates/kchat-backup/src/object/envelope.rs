@@ -9,6 +9,8 @@
 //!   EncryptedStreamBlockV1 (repeated until EOF; at least one block)
 //!     ciphertext_len: u32
 //!     ciphertext: [u8; ciphertext_len]
+//!
+//! Nonce suffix: counter:u32-be || final:u8 (implicit per frame).
 
 pub(crate) const ENVELOPE_MAGIC: &[u8; 4] = b"KCBK";
 pub(crate) const ENVELOPE_VERSION: u16 = 1;
@@ -18,6 +20,22 @@ pub(crate) const ENVELOPE_HEADER_BYTES: usize = 29;
 pub(crate) const STREAM_NONCE_PREFIX_BYTES: usize = 19;
 pub(crate) const COMPRESSED_BLOCK_BYTES: usize = 64 * 1024;
 pub(crate) const AEAD_TAG_BYTES: usize = 16;
+
+/// Parse the unauthenticated fixed header.
+pub(crate) fn parse_header(
+    header: &[u8; ENVELOPE_HEADER_BYTES],
+) -> Result<[u8; STREAM_NONCE_PREFIX_BYTES], crate::BackupError> {
+    if &header[..4] != ENVELOPE_MAGIC
+        || header[4..6] != ENVELOPE_VERSION.to_be_bytes()
+        || header[6..8] != CRYPTO_SUITE_ID.to_be_bytes()
+        || header[8..10] != COMPRESSION_ID.to_be_bytes()
+    {
+        return Err(crate::BackupError::unsupported_format());
+    }
+    let mut prefix = [0; STREAM_NONCE_PREFIX_BYTES];
+    prefix.copy_from_slice(&header[10..]);
+    Ok(prefix)
+}
 
 pub(crate) fn serialize_header(
     nonce_prefix: &[u8; STREAM_NONCE_PREFIX_BYTES],

@@ -1,0 +1,48 @@
+[package]
+name = "kchat-uniffi"
+description = "Unified UniFFI bindings exposing KChat MLS and encrypted backup APIs."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+crate-type = ["staticlib", "lib", "cdylib"]
+name = "kchat_mobile_sdk_rs"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[[test]]
+name = "ffi_max_past_epochs"
+path = "tests/mls/ffi_max_past_epochs.rs"
+
+[[test]]
+name = "ffi_sqlcipher"
+path = "tests/mls/ffi_sqlcipher.rs"
+
+[[test]]
+name = "ffi_sqlite_group_flow"
+path = "tests/mls/ffi_sqlite_group_flow.rs"
+
+[dependencies]
+kchat-backup = { path = "../kchat-backup" }
+thiserror = { workspace = true }
+uniffi = { version = "0.31", features = ["cli", "tokio"] }
+zeroize = { workspace = true }
+openmls = { workspace = true }
+openmls_basic_credential = { workspace = true }
+openmls_traits = { workspace = true }
+openmls_rust_crypto = { workspace = true }
+rusqlite = { version = "0.37", features = ["bundled"] }
+tokio = { version = "1", features = ["full"] }
+uq-openmls = { path = "../uq-openmls" }
+kchat-mls = { path = "../kchat-mls" }
+kchat_storage_provider = { path = "../kchat-storage-provider" }
+secrecy = { workspace = true }
+sha2 = "0.10"

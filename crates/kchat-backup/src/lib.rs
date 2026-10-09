@@ -9,9 +9,7 @@ mod limits;
 mod object;
 
 pub use account::BackupAccountId;
-pub use context::{
-    BACKUP_FORMAT_VERSION_V1, BackupChunkId, BackupNamespaceId, BackupObjectContextV1,
-};
+pub use context::{BACKUP_FORMAT_VERSION_V1, BackupChunkId, BackupId, BackupObjectContextV1};
 pub use descriptor::{
     DescriptorBackupModeV1, DescriptorHeaderV1, open_descriptor_v1, seal_descriptor_v1,
 };
@@ -23,6 +21,7 @@ pub use limits::{
     MAX_ZSTD_WINDOW_BYTES_V1,
 };
 pub use object::{
-    BackupByteSink, BackupByteSource, BackupObjectDescriptor, BackupObjectWriterV1,
-    copy_opaque_bytes_v1, seal_object_v1,
+    BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupObjectDescriptor,
+    BackupObjectValidatorV1, BackupObjectWriterV1, BackupValidationState, ExpectedBackupObjectV1,
+    copy_opaque_bytes_v1, open_object_v1, seal_object_v1, verify_object_envelope_v1,
 };

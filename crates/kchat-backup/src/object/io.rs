@@ -1,9 +1,21 @@
 use crate::{BackupError, MAX_IO_CHUNK_BYTES_V1, MAX_PLAINTEXT_OBJECT_BYTES_V1};
 
 pub trait BackupByteSource {
+    /// Short reads are allowed; zero means permanent EOF.
     fn read_chunk(&mut self, destination: &mut [u8]) -> Result<usize, BackupError>;
 
     /// Returns whether the caller has cancelled the active operation.
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+/// Opens the same immutable ciphertext from offset zero on each pass.
+/// Calls are synchronous; callers must unblock I/O to cancel it.
+pub trait BackupByteSourceFactory {
+    fn open(&mut self) -> Result<Box<dyn BackupByteSource>, BackupError>;
+
+    /// Share cancellation with opened sources.
     fn is_cancelled(&self) -> bool {
         false
     }

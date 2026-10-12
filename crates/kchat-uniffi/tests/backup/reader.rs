@@ -4,10 +4,9 @@ use std::sync::{
 };
 
 use kchat_mobile_sdk_rs::backup::{
-    BackupCiphertextSink, BackupCiphertextSource, BackupCiphertextSourceFactory, BackupFfiError,
-    BackupKeyMode, BackupMasterKey, BackupObjectContext, BackupObjectMetadata, BackupPlaintextSink,
-    BackupPlaintextSource, generate_mnemonic, import_from_raw, open_backup_object_v1,
-    seal_backup_object_v1,
+    BackupCiphertextSink, BackupCiphertextSource, BackupFfiError, BackupKeyMode, BackupMasterKey,
+    BackupObjectContext, BackupObjectMetadata, BackupPlaintextSink, BackupPlaintextSource,
+    generate_mnemonic, import_from_raw, open_backup_object_v1, seal_backup_object_v1,
 };
 
 const ACCOUNT: &str = "00112233-4455-6677-8899-aabbccddeeff";
@@ -62,34 +61,13 @@ impl BackupCiphertextSource for CiphertextSource {
     }
 }
 
-struct SourceFactory {
-    bytes: Arc<[u8]>,
-    opens: AtomicUsize,
-    closes: Arc<AtomicUsize>,
-}
-
-impl SourceFactory {
+impl CiphertextSource {
     fn new(bytes: Vec<u8>) -> Self {
         Self {
             bytes: bytes.into(),
-            opens: AtomicUsize::new(0),
+            offset: Mutex::new(0),
             closes: Arc::new(AtomicUsize::new(0)),
         }
-    }
-}
-
-impl BackupCiphertextSourceFactory for SourceFactory {
-    fn open(&self) -> Result<Arc<dyn BackupCiphertextSource>, BackupFfiError> {
-        self.opens.fetch_add(1, Ordering::Relaxed);
-        Ok(Arc::new(CiphertextSource {
-            bytes: Arc::clone(&self.bytes),
-            offset: Mutex::new(0),
-            closes: Arc::clone(&self.closes),
-        }))
-    }
-
-    fn is_cancelled(&self) -> Result<bool, BackupFfiError> {
-        Ok(false)
     }
 }
 
@@ -123,7 +101,7 @@ fn kotlin_style_callbacks_seal_and_open_the_same_json() {
         ciphertext_sink.clone(),
     )
     .unwrap();
-    let factory = Arc::new(SourceFactory::new(
+    let source = Arc::new(CiphertextSource::new(
         ciphertext_sink.0.lock().unwrap().clone(),
     ));
     let plaintext_sink = Arc::new(PlaintextSink::default());
@@ -132,14 +110,13 @@ fn kotlin_style_callbacks_seal_and_open_the_same_json() {
         key,
         ACCOUNT.to_owned(),
         vec![7; 16],
-        factory.clone(),
+        source.clone(),
         metadata,
         plaintext_sink.clone(),
     )
     .unwrap();
 
-    assert_eq!(factory.opens.load(Ordering::Relaxed), 2);
-    assert_eq!(factory.closes.load(Ordering::Relaxed), 2);
+    assert_eq!(source.closes.load(Ordering::Relaxed), 1);
     assert_eq!(*plaintext_sink.0.lock().unwrap(), JSON);
 }
 
@@ -158,7 +135,7 @@ fn opens_an_object_for_both_key_modes() {
             ciphertext_sink.clone(),
         )
         .unwrap();
-        let factory = Arc::new(SourceFactory::new(
+        let source = Arc::new(CiphertextSource::new(
             ciphertext_sink.0.lock().unwrap().clone(),
         ));
         let plaintext_sink = Arc::new(PlaintextSink::default());
@@ -167,14 +144,13 @@ fn opens_an_object_for_both_key_modes() {
             Arc::clone(&key),
             ACCOUNT.to_owned(),
             vec![7; 16],
-            factory.clone(),
+            source.clone(),
             metadata,
             plaintext_sink.clone(),
         )
         .unwrap();
 
-        assert_eq!(factory.opens.load(Ordering::Relaxed), 2);
-        assert_eq!(factory.closes.load(Ordering::Relaxed), 2);
+        assert_eq!(source.closes.load(Ordering::Relaxed), 1);
         assert_eq!(*plaintext_sink.0.lock().unwrap(), JSON);
     }
 }
@@ -194,51 +170,35 @@ fn open_rejects_invalid_identity_and_inventory() {
     )
     .unwrap();
 
-    for (account, chunk, corrupt_hash, expected_error, expected_opens) in [
+    for (account, chunk, corrupt_hash, expected_error) in [
         (
             "invalid",
             vec![7; 16],
             false,
             BackupFfiError::InvalidArgument,
-            0,
         ),
-        (
-            ACCOUNT,
-            vec![7; 15],
-            false,
-            BackupFfiError::InvalidArgument,
-            0,
-        ),
-        (
-            ACCOUNT,
-            vec![0; 16],
-            false,
-            BackupFfiError::InvalidArgument,
-            0,
-        ),
+        (ACCOUNT, vec![7; 15], false, BackupFfiError::InvalidArgument),
+        (ACCOUNT, vec![0; 16], false, BackupFfiError::InvalidArgument),
         (
             ACCOUNT,
             vec![8; 16],
             false,
             BackupFfiError::AuthenticationFailed,
-            2,
         ),
         (
             "10112233-4455-6677-8899-aabbccddeeff",
             vec![7; 16],
             false,
             BackupFfiError::AuthenticationFailed,
-            2,
         ),
         (
             ACCOUNT,
             vec![7; 16],
             true,
             BackupFfiError::IntegrityMismatch,
-            1,
         ),
     ] {
-        let factory = Arc::new(SourceFactory::new(
+        let source = Arc::new(CiphertextSource::new(
             ciphertext_sink.0.lock().unwrap().clone(),
         ));
         let plaintext_sink = Arc::new(PlaintextSink::default());
@@ -250,7 +210,7 @@ fn open_rejects_invalid_identity_and_inventory() {
             Arc::clone(&key),
             account.to_owned(),
             chunk,
-            factory.clone(),
+            source.clone(),
             BackupObjectMetadata {
                 ciphertext_size: metadata.ciphertext_size,
                 ciphertext_sha256,
@@ -259,14 +219,20 @@ fn open_rejects_invalid_identity_and_inventory() {
             plaintext_sink.clone(),
         );
         assert_eq!(result.unwrap_err(), expected_error);
-        assert_eq!(factory.opens.load(Ordering::Relaxed), expected_opens);
-        assert_eq!(factory.closes.load(Ordering::Relaxed), expected_opens);
-        assert!(plaintext_sink.0.lock().unwrap().is_empty());
+        if expected_error == BackupFfiError::InvalidArgument {
+            assert_eq!(*source.offset.lock().unwrap(), 0);
+        }
+        assert_eq!(source.closes.load(Ordering::Relaxed), 1);
+        if corrupt_hash {
+            assert_eq!(*plaintext_sink.0.lock().unwrap(), JSON);
+        } else {
+            assert!(plaintext_sink.0.lock().unwrap().is_empty());
+        }
     }
 }
 
 #[test]
-fn inventory_mismatch_prevents_plaintext_callback() {
+fn inventory_mismatch_rejects_provisional_plaintext() {
     let (key, context) = context();
     let ciphertext_sink = Arc::new(CiphertextSink::default());
     let mut metadata = seal_backup_object_v1(
@@ -276,7 +242,7 @@ fn inventory_mismatch_prevents_plaintext_callback() {
     )
     .unwrap();
     metadata.ciphertext_sha256[0] ^= 1;
-    let factory = Arc::new(SourceFactory::new(
+    let source = Arc::new(CiphertextSource::new(
         ciphertext_sink.0.lock().unwrap().clone(),
     ));
     let plaintext_sink = Arc::new(PlaintextSink::default());
@@ -286,22 +252,25 @@ fn inventory_mismatch_prevents_plaintext_callback() {
             key,
             ACCOUNT.to_owned(),
             vec![7; 16],
-            factory.clone(),
+            source.clone(),
             metadata,
             plaintext_sink.clone()
         ),
         Err(BackupFfiError::IntegrityMismatch)
     ));
-    assert_eq!(factory.opens.load(Ordering::Relaxed), 1);
-    assert_eq!(factory.closes.load(Ordering::Relaxed), 1);
-    assert!(plaintext_sink.0.lock().unwrap().is_empty());
+    assert_eq!(source.closes.load(Ordering::Relaxed), 1);
+    assert_eq!(*plaintext_sink.0.lock().unwrap(), JSON);
 }
 
 struct FailedCancellationCallback;
 
-impl BackupCiphertextSourceFactory for FailedCancellationCallback {
-    fn open(&self) -> Result<Arc<dyn BackupCiphertextSource>, BackupFfiError> {
-        panic!("reader must check cancellation before opening a source")
+impl BackupCiphertextSource for FailedCancellationCallback {
+    fn read_chunk(&self, _: u32) -> Result<Vec<u8>, BackupFfiError> {
+        panic!("reader must check cancellation before reading a source")
+    }
+
+    fn release_stream(&self) -> Result<(), BackupFfiError> {
+        Ok(())
     }
 
     fn is_cancelled(&self) -> Result<bool, BackupFfiError> {

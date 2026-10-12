@@ -5,10 +5,9 @@ use std::sync::{
 
 use kchat_backup::{
     BackupAccountId, BackupByteSink, BackupByteSource, BackupChunkId, BackupError, BackupErrorCode,
-    BackupId, BackupObjectContextV1, BackupObjectWriterV1, ExpectedBackupObjectV1,
-    MAX_CIPHERTEXT_OBJECT_BYTES_V1, MAX_IO_CHUNK_BYTES_V1, MnemonicBackupKey, open_object_v1,
+    BackupId, BackupObjectContextV1, BackupObjectWriterV1, MAX_IO_CHUNK_BYTES_V1,
+    MnemonicBackupKey, open_object_v1,
 };
-use sha2::{Digest, Sha256};
 
 fn context(account: &str, key: u8, chunk: u8) -> BackupObjectContextV1 {
     let master = MnemonicBackupKey::import_from_raw(&[key; 32]).unwrap();
@@ -44,10 +43,6 @@ fn seal(payload: &[u8]) -> Vec<u8> {
         writer.finish().unwrap();
     }
     sink.0
-}
-
-fn expected(bytes: &[u8]) -> ExpectedBackupObjectV1 {
-    ExpectedBackupObjectV1::new(bytes.len() as u64, Sha256::digest(bytes).into(), 1).unwrap()
 }
 
 struct Source {
@@ -104,7 +99,6 @@ impl Source {
 fn open_discarding_output(
     context: &BackupObjectContextV1,
     source: &mut dyn BackupByteSource,
-    expected: &ExpectedBackupObjectV1,
 ) -> Result<(), BackupError> {
     struct DiscardSink;
     impl BackupByteSink for DiscardSink {
@@ -112,15 +106,11 @@ fn open_discarding_output(
             Ok(())
         }
     }
-    open_object_v1(context, source, expected, &mut DiscardSink)
+    open_object_v1(context, source, &mut DiscardSink)
 }
 
 fn open_bytes(bytes: &[u8]) -> Result<(), BackupError> {
-    open_discarding_output(
-        &context(ACCOUNT, 3, 7),
-        &mut Source::new(bytes),
-        &expected(bytes),
-    )
+    open_discarding_output(&context(ACCOUNT, 3, 7), &mut Source::new(bytes))
 }
 
 fn noisy_payload() -> Vec<u8> {
@@ -157,39 +147,7 @@ fn validates_writer_output_with_empty_small_and_multiblock_payloads() {
         let bytes = seal(&payload);
         let mut source = Source::new(&bytes);
         source.max_read = 7;
-        open_discarding_output(&context(ACCOUNT, 3, 7), &mut source, &expected(&bytes)).unwrap();
-    }
-}
-
-#[test]
-fn rejects_inventory_mismatch_in_the_single_pass() {
-    let bytes = seal(b"private payload");
-    for (metadata, releases_plaintext) in [
-        (
-            ExpectedBackupObjectV1::new(bytes.len() as u64, [0; 32], 1).unwrap(),
-            true,
-        ),
-        (
-            ExpectedBackupObjectV1::new(bytes.len() as u64 - 1, Sha256::digest(&bytes).into(), 1)
-                .unwrap(),
-            false,
-        ),
-        (
-            ExpectedBackupObjectV1::new(bytes.len() as u64 + 1, Sha256::digest(&bytes).into(), 1)
-                .unwrap(),
-            true,
-        ),
-    ] {
-        let mut source = Source::new(&bytes);
-        let mut sink = Sink::default();
-        let error =
-            open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &metadata, &mut sink).unwrap_err();
-        assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
-        if releases_plaintext {
-            assert_eq!(sink.0, b"private payload");
-        } else {
-            assert!(sink.0.is_empty());
-        }
+        open_discarding_output(&context(ACCOUNT, 3, 7), &mut source).unwrap();
     }
 }
 
@@ -201,8 +159,7 @@ fn rejects_wrong_account_key_and_chunk_context() {
         context(ACCOUNT, 4, 7),
         context(ACCOUNT, 3, 8),
     ] {
-        let error = open_discarding_output(&wrong, &mut Source::new(&bytes), &expected(&bytes))
-            .unwrap_err();
+        let error = open_discarding_output(&wrong, &mut Source::new(&bytes)).unwrap_err();
         assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
     }
 }
@@ -220,7 +177,7 @@ fn rejects_unsupported_header_fields() {
 }
 
 #[test]
-fn rejects_nonce_ciphertext_and_tag_corruption_even_with_recomputed_inventory_hash() {
+fn rejects_nonce_ciphertext_and_tag_corruption_without_inventory_metadata() {
     let original = seal(&noisy_payload());
     let ranges = frames(&original);
     let mut indices = vec![10];
@@ -309,28 +266,12 @@ fn rejects_complete_frame_after_final() {
 }
 
 #[test]
-fn rejects_a_different_object_even_with_valid_aead() {
-    let first = seal(b"same content");
-    let second = seal(b"same content");
-    assert_eq!(first.len(), second.len());
-    let mut source = Source::new(&second);
-    let error = open_discarding_output(&context(ACCOUNT, 3, 7), &mut source, &expected(&first))
-        .unwrap_err();
-    assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
-}
-
-#[test]
 fn authentication_failure_never_releases_plaintext() {
     let mut bytes = seal(b"sensitive plaintext");
     bytes[33] ^= 1;
     let mut sink = Sink::default();
-    let error = open_object_v1(
-        &context(ACCOUNT, 3, 7),
-        &mut Source::new(&bytes),
-        &expected(&bytes),
-        &mut sink,
-    )
-    .unwrap_err();
+    let error =
+        open_object_v1(&context(ACCOUNT, 3, 7), &mut Source::new(&bytes), &mut sink).unwrap_err();
     assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
     assert!(sink.0.is_empty());
 }
@@ -343,30 +284,11 @@ fn cancellation_before_or_during_read_stops_without_output() {
         source.cancelled.store(before_read, Ordering::Relaxed);
         source.cancel_on_read = !before_read;
         let mut sink = Sink::default();
-        let error = open_object_v1(
-            &context(ACCOUNT, 3, 7),
-            &mut source,
-            &expected(&bytes),
-            &mut sink,
-        )
-        .unwrap_err();
+        let error = open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &mut sink).unwrap_err();
         assert_eq!(error.code(), BackupErrorCode::Cancelled);
         assert_eq!(source.offset == 0, before_read);
         assert!(sink.0.is_empty());
     }
-}
-
-#[test]
-fn rejects_invalid_inventory_before_io() {
-    assert!(
-        matches!(ExpectedBackupObjectV1::new(49, [0; 32], 2), Err(e) if e.code() == BackupErrorCode::UnsupportedFormat)
-    );
-    assert!(
-        matches!(ExpectedBackupObjectV1::new(48, [0; 32], 1), Err(e) if e.code() == BackupErrorCode::InvalidArgument)
-    );
-    assert!(
-        matches!(ExpectedBackupObjectV1::new(MAX_CIPHERTEXT_OBJECT_BYTES_V1 + 1, [0; 32], 1), Err(e) if e.code() == BackupErrorCode::ResourceLimitExceeded)
-    );
 }
 
 #[test]
@@ -381,7 +303,6 @@ fn handles_callback_faults_without_panicking_or_exposing_plaintext() {
             }
         }
     }
-    let bytes = seal(b"payload");
     for (bad_count, code) in [
         (true, BackupErrorCode::InvalidState),
         (false, BackupErrorCode::IoError),
@@ -390,7 +311,6 @@ fn handles_callback_faults_without_panicking_or_exposing_plaintext() {
         let error = open_object_v1(
             &context(ACCOUNT, 3, 7),
             &mut FaultySource(bad_count),
-            &expected(&bytes),
             &mut sink,
         )
         .unwrap_err();
@@ -403,22 +323,10 @@ fn handles_callback_faults_without_panicking_or_exposing_plaintext() {
 fn rejects_each_truncation_point_of_a_small_object() {
     let original = seal(b"some canonical-looking but opaque bytes");
     for end in 0..original.len() {
-        let bytes = &original[..end];
-        let metadata =
-            ExpectedBackupObjectV1::new(bytes.len() as u64, Sha256::digest(bytes).into(), 1);
-        match metadata {
-            Err(e) => assert_eq!(e.code(), BackupErrorCode::InvalidArgument),
-            Ok(metadata) => {
-                assert!(
-                    open_discarding_output(
-                        &context(ACCOUNT, 3, 7),
-                        &mut Source::new(bytes),
-                        &metadata
-                    )
-                    .is_err()
-                );
-            }
-        }
+        assert!(
+            open_bytes(&original[..end]).is_err(),
+            "accepted truncation at {end}"
+        );
     }
 }
 
@@ -434,13 +342,7 @@ fn opens_opaque_writer_objects_reading_each_byte_once() {
         let mut source = Source::new(&bytes);
         source.max_read = 11;
         let mut sink = Sink::default();
-        open_object_v1(
-            &context(ACCOUNT, 3, 7),
-            &mut source,
-            &expected(&bytes),
-            &mut sink,
-        )
-        .unwrap();
+        open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &mut sink).unwrap();
         assert_eq!(sink.0, plaintext);
         assert_eq!(source.offset, bytes.len());
         assert_eq!(source.eof_reads, 1);
@@ -459,34 +361,21 @@ fn corrupted_nonce_or_first_frame_never_reaches_sink() {
         changed[index] ^= 1;
         let mut source = Source::new(&changed);
         let mut sink = Sink::default();
-        let error = open_object_v1(
-            &context(ACCOUNT, 3, 7),
-            &mut source,
-            &expected(&bytes),
-            &mut sink,
-        )
-        .unwrap_err();
+        let error = open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &mut sink).unwrap_err();
         assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
         assert!(sink.0.is_empty());
     }
 }
 
 #[test]
-fn valid_replacement_is_rejected_at_completion_even_after_output() {
-    let original = seal(b"payload-A");
-    let replacement = seal(b"payload-B");
-    assert_eq!(original.len(), replacement.len());
-    let mut source = Source::new(&replacement);
-    let mut staging = Sink::default();
-    let error = open_object_v1(
-        &context(ACCOUNT, 3, 7),
-        &mut source,
-        &expected(&original),
-        &mut staging,
-    )
-    .unwrap_err();
-    assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
-    assert_eq!(staging.0, b"payload-B");
+fn opens_each_authenticated_object_for_the_same_context_without_inventory_metadata() {
+    for payload in [b"payload-A", b"payload-B"] {
+        let ciphertext = seal(payload);
+        let mut source = Source::new(&ciphertext);
+        let mut sink = Sink::default();
+        open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &mut sink).unwrap();
+        assert_eq!(sink.0, payload);
+    }
 }
 
 #[test]
@@ -498,13 +387,7 @@ fn corrupted_late_frame_leaves_only_an_authenticated_prefix() {
     changed[last.start + 4] ^= 1;
     let mut source = Source::new(&changed);
     let mut sink = Sink::default();
-    let error = open_object_v1(
-        &context(ACCOUNT, 3, 7),
-        &mut source,
-        &expected(&bytes),
-        &mut sink,
-    )
-    .unwrap_err();
+    let error = open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &mut sink).unwrap_err();
     assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
     assert!(!sink.0.is_empty());
     assert!(sink.0.len() < plaintext.len());
@@ -525,14 +408,9 @@ fn sink_errors_are_propagated() {
     let mut sink = FailingSink(0);
     let mut source = Source::new(&bytes);
     assert_eq!(
-        open_object_v1(
-            &context(ACCOUNT, 3, 7),
-            &mut source,
-            &expected(&bytes),
-            &mut sink
-        )
-        .unwrap_err()
-        .code(),
+        open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &mut sink)
+            .unwrap_err()
+            .code(),
         BackupErrorCode::IoError
     );
     assert_eq!(sink.0, 1);
@@ -553,14 +431,9 @@ fn cancellation_inside_output_stops_without_more_callbacks() {
     let mut source = Source::new(&bytes);
     let mut sink = CancelSink(source.cancelled.clone(), 0);
     assert_eq!(
-        open_object_v1(
-            &context(ACCOUNT, 3, 7),
-            &mut source,
-            &expected(&bytes),
-            &mut sink
-        )
-        .unwrap_err()
-        .code(),
+        open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &mut sink)
+            .unwrap_err()
+            .code(),
         BackupErrorCode::Cancelled
     );
     assert_eq!(sink.1, 1);

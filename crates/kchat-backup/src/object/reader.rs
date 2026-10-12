@@ -2,92 +2,43 @@
 
 use aead_stream::{DecryptorBE32, Key, Nonce, StreamBE32, aead::Payload};
 use chacha20poly1305::XChaCha20Poly1305;
-use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     BackupByteSink, BackupByteSource, BackupError, BackupErrorCode, BackupObjectContextV1,
-    BackupObjectDescriptor, MAX_CIPHERTEXT_OBJECT_BYTES_V1, MAX_IO_CHUNK_BYTES_V1,
+    MAX_CIPHERTEXT_OBJECT_BYTES_V1, MAX_IO_CHUNK_BYTES_V1,
 };
 
 use super::{
     compression::BoundedDecoder,
-    envelope::{
-        AEAD_TAG_BYTES, COMPRESSED_BLOCK_BYTES, ENVELOPE_HEADER_BYTES, ENVELOPE_VERSION,
-        parse_header,
-    },
+    envelope::{AEAD_TAG_BYTES, COMPRESSED_BLOCK_BYTES, ENVELOPE_HEADER_BYTES, parse_header},
 };
 
-/// Expected metadata from a committed inventory entry.
-#[derive(Clone, Copy)]
-pub struct ExpectedBackupObjectV1 {
-    ciphertext_size: u64,
-    ciphertext_sha256: [u8; 32],
-}
-
-impl ExpectedBackupObjectV1 {
-    pub fn new(
-        ciphertext_size: u64,
-        ciphertext_sha256: [u8; 32],
-        format_version: u16,
-    ) -> Result<Self, BackupError> {
-        if format_version != ENVELOPE_VERSION {
-            return Err(BackupError::unsupported_format());
-        }
-        if ciphertext_size > MAX_CIPHERTEXT_OBJECT_BYTES_V1 {
-            return Err(BackupError::resource_limit_exceeded());
-        }
-        if ciphertext_size < (ENVELOPE_HEADER_BYTES + 4 + AEAD_TAG_BYTES) as u64 {
-            return Err(BackupError::invalid_argument());
-        }
-        Ok(Self {
-            ciphertext_size,
-            ciphertext_sha256,
-        })
-    }
-}
-
-impl From<BackupObjectDescriptor> for ExpectedBackupObjectV1 {
-    fn from(descriptor: BackupObjectDescriptor) -> Self {
-        Self {
-            ciphertext_size: descriptor.ciphertext_size(),
-            ciphertext_sha256: *descriptor.ciphertext_sha256(),
-        }
-    }
-}
-
-/// Decrypt, decompress, and verify ciphertext in one pass without parsing payloads.
+/// Authenticate, decrypt, and decompress ciphertext in one pass without parsing payloads.
+/// Output is provisional; discard staged bytes on any error.
 pub fn open_object_v1(
     context: &BackupObjectContextV1,
     source: &mut dyn BackupByteSource,
-    expected: &ExpectedBackupObjectV1,
     sink: &mut dyn BackupByteSink,
 ) -> Result<(), BackupError> {
-    let mut input = CheckedSource::new(source, expected)?;
+    let mut input = CheckedSource::new(source)?;
     let mut decoder = BoundedDecoder::new()?;
     authenticate_envelope(context, &mut input, &mut decoder, sink)?;
-    input.finish()?;
+    input.check_cancelled()?;
     decoder.finish()
 }
 
 struct CheckedSource<'a> {
     source: &'a mut dyn BackupByteSource,
-    expected: &'a ExpectedBackupObjectV1,
     bytes: u64,
-    hash: Sha256,
     eof: bool,
 }
 
 impl<'a> CheckedSource<'a> {
-    fn new(
-        source: &'a mut dyn BackupByteSource,
-        expected: &'a ExpectedBackupObjectV1,
-    ) -> Result<Self, BackupError> {
+    fn new(source: &'a mut dyn BackupByteSource) -> Result<Self, BackupError> {
         let input = Self {
             source,
-            expected,
             bytes: 0,
-            hash: Sha256::new(),
             eof: false,
         };
         input.check_cancelled()?;
@@ -107,7 +58,8 @@ impl<'a> CheckedSource<'a> {
         if self.eof {
             return Ok(0);
         }
-        let remaining_with_probe = (self.expected.ciphertext_size - self.bytes + 1) as usize;
+        // This is a resource cap, not a comparison with an inventory size.
+        let remaining_with_probe = (MAX_CIPHERTEXT_OBJECT_BYTES_V1 - self.bytes + 1) as usize;
         let capacity = destination
             .len()
             .min(MAX_IO_CHUNK_BYTES_V1)
@@ -118,10 +70,9 @@ impl<'a> CheckedSource<'a> {
             return Err(BackupError::invalid_state());
         }
         self.bytes += count as u64;
-        if self.bytes > self.expected.ciphertext_size {
-            return Err(BackupError::from_code(BackupErrorCode::IntegrityMismatch));
+        if self.bytes > MAX_CIPHERTEXT_OBJECT_BYTES_V1 {
+            return Err(BackupError::resource_limit_exceeded());
         }
-        self.hash.update(&destination[..count]);
         self.eof = count == 0;
         Ok(count)
     }
@@ -148,18 +99,6 @@ impl<'a> CheckedSource<'a> {
             return Err(BackupError::from_code(BackupErrorCode::MalformedObject));
         }
         Ok(Some(length))
-    }
-
-    fn finish(self) -> Result<(), BackupError> {
-        self.check_cancelled()?;
-        if !self.eof || self.bytes != self.expected.ciphertext_size {
-            return Err(BackupError::from_code(BackupErrorCode::IntegrityMismatch));
-        }
-        let digest: [u8; 32] = self.hash.finalize().into();
-        if digest != self.expected.ciphertext_sha256 {
-            return Err(BackupError::from_code(BackupErrorCode::IntegrityMismatch));
-        }
-        Ok(())
     }
 }
 
@@ -221,5 +160,50 @@ fn authenticate_envelope(
             &|| input.check_cancelled(),
         )?;
         length = next.ok_or_else(BackupError::invalid_state)?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct GeneratedSource {
+        remaining: u64,
+    }
+
+    impl BackupByteSource for GeneratedSource {
+        fn read_chunk(&mut self, destination: &mut [u8]) -> Result<usize, BackupError> {
+            let count = destination.len().min(self.remaining as usize);
+            destination[..count].fill(0);
+            self.remaining -= count as u64;
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn enforces_ciphertext_resource_cap_without_inventory_metadata() {
+        for extra in [0, 1] {
+            let mut source = GeneratedSource {
+                remaining: MAX_CIPHERTEXT_OBJECT_BYTES_V1 + extra,
+            };
+            let mut input = CheckedSource::new(&mut source).unwrap();
+            let mut buffer = [0; MAX_IO_CHUNK_BYTES_V1];
+            let result = loop {
+                match input.read(&mut buffer) {
+                    Ok(0) => break Ok(()),
+                    Ok(_) => {}
+                    Err(error) => break Err(error),
+                }
+            };
+            if extra == 0 {
+                result.unwrap();
+            } else {
+                assert_eq!(
+                    result.unwrap_err().code(),
+                    BackupErrorCode::ResourceLimitExceeded
+                );
+            }
+            assert_eq!(source.remaining, 0);
+        }
     }
 }

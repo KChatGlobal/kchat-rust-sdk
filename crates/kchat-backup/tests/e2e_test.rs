@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use kchat_backup::{
-    BackupAccountId, BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupChunkId,
-    BackupError, BackupId, BackupObjectContextV1, DescriptorBackupModeV1, DescriptorHeaderV1,
-    ExpectedBackupObjectV1, MnemonicBackupKey, open_descriptor_v1, open_object_v1,
-    seal_descriptor_v1, seal_object_v1,
+    BackupAccountId, BackupByteSink, BackupByteSource, BackupChunkId, BackupError, BackupId,
+    BackupObjectContextV1, DescriptorBackupModeV1, DescriptorHeaderV1, ExpectedBackupObjectV1,
+    MnemonicBackupKey, open_descriptor_v1, open_object_v1, seal_descriptor_v1, seal_object_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -55,17 +54,6 @@ struct StoredChunk {
     ciphertext_size: u64,
     ciphertext_sha256: [u8; 32],
     format_version: u16,
-    opens: usize,
-}
-
-impl BackupByteSourceFactory for StoredChunk {
-    fn open(&mut self) -> Result<Box<dyn BackupByteSource>, BackupError> {
-        self.opens += 1;
-        Ok(Box::new(MemorySource {
-            bytes: Arc::clone(&self.ciphertext),
-            offset: 0,
-        }))
-    }
 }
 
 #[test]
@@ -105,13 +93,12 @@ fn encrypt_upload_download_verify_and_decrypt_json() {
         &<[u8; 32]>::from(Sha256::digest(&upload_sink.0))
     );
 
-    let mut server = StoredChunk {
+    let server = StoredChunk {
         descriptor: sealed_descriptor.into(),
         ciphertext: upload_sink.0.into(),
         ciphertext_size: writer_metadata.ciphertext_size(),
         ciphertext_sha256: *writer_metadata.ciphertext_sha256(),
         format_version: writer_metadata.format_version(),
-        opens: 0,
     };
 
     let restore_master = MnemonicBackupKey::import_from_raw(&TEST_MASTER_KEY).unwrap();
@@ -132,8 +119,12 @@ fn encrypt_upload_download_verify_and_decrypt_json() {
     )
     .unwrap();
     let mut restore_sink = MemorySink::default();
-    open_object_v1(&restore_context, &mut server, &expected, &mut restore_sink).unwrap();
+    let mut source = MemorySource {
+        bytes: server.ciphertext.clone(),
+        offset: 0,
+    };
+    open_object_v1(&restore_context, &mut source, &expected, &mut restore_sink).unwrap();
 
-    assert_eq!(server.opens, 2);
+    assert_eq!(source.offset, server.ciphertext.len());
     assert_eq!(restore_sink.0, JSON);
 }

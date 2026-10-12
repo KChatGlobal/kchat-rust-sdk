@@ -10,17 +10,6 @@ pub trait BackupByteSource {
     }
 }
 
-/// Opens the same immutable ciphertext from offset zero on each pass.
-/// Calls are synchronous; callers must unblock I/O to cancel it.
-pub trait BackupByteSourceFactory {
-    fn open(&mut self) -> Result<Box<dyn BackupByteSource>, BackupError>;
-
-    /// Share cancellation with opened sources.
-    fn is_cancelled(&self) -> bool {
-        false
-    }
-}
-
 pub trait BackupByteSink {
     fn write_chunk(&mut self, source: &[u8]) -> Result<(), BackupError>;
 }

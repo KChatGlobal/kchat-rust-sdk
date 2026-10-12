@@ -9,10 +9,7 @@ pub use key::{
     GeneratedMnemonicBackupKey, GeneratedPasswordBackupKey, generate_mnemonic, generate_password,
     import_from_mnemonic, import_from_password, import_from_raw,
 };
-pub use reader::{
-    BackupCiphertextSource, BackupCiphertextSourceFactory, BackupPlaintextSink,
-    open_backup_object_v1,
-};
+pub use reader::{BackupCiphertextSource, BackupPlaintextSink, open_backup_object_v1};
 pub use writer::{
     BackupCiphertextSink, BackupObjectMetadata, BackupPlaintextSource, seal_backup_object_v1,
 };

@@ -1,17 +1,12 @@
-use std::{
-    collections::VecDeque,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use kchat_backup::{
-    BackupAccountId, BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupChunkId,
-    BackupError, BackupErrorCode, BackupId, BackupObjectContextV1, BackupObjectValidatorV1,
-    BackupObjectWriterV1, BackupValidationState, ExpectedBackupObjectV1,
+    BackupAccountId, BackupByteSink, BackupByteSource, BackupChunkId, BackupError, BackupErrorCode,
+    BackupId, BackupObjectContextV1, BackupObjectWriterV1, ExpectedBackupObjectV1,
     MAX_CIPHERTEXT_OBJECT_BYTES_V1, MAX_IO_CHUNK_BYTES_V1, MnemonicBackupKey, open_object_v1,
-    verify_object_envelope_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -58,6 +53,7 @@ fn expected(bytes: &[u8]) -> ExpectedBackupObjectV1 {
 struct Source {
     bytes: Arc<[u8]>,
     offset: usize,
+    eof_reads: usize,
     max_read: usize,
     cancel_on_read: bool,
     cancelled: Arc<AtomicBool>,
@@ -72,6 +68,10 @@ impl BackupByteSource for Source {
             .min(self.bytes.len() - self.offset);
         destination[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
         self.offset += count;
+        if count == 0 {
+            self.eof_reads += 1;
+            assert_eq!(self.eof_reads, 1, "source must not be read again after EOF");
+        }
         if self.cancel_on_read {
             self.cancelled.store(true, Ordering::Relaxed);
         }
@@ -87,20 +87,12 @@ impl Drop for Source {
     }
 }
 
-struct Factory {
-    versions: VecDeque<Arc<[u8]>>,
-    opens: usize,
-    max_read: usize,
-    cancel_on_read: bool,
-    cancelled: Arc<AtomicBool>,
-    dropped: Arc<AtomicUsize>,
-}
-impl Factory {
+impl Source {
     fn new(bytes: &[u8]) -> Self {
-        let bytes: Arc<[u8]> = bytes.into();
         Self {
-            versions: VecDeque::from([bytes.clone(), bytes]),
-            opens: 0,
+            bytes: bytes.into(),
+            offset: 0,
+            eof_reads: 0,
             max_read: usize::MAX,
             cancel_on_read: false,
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -108,31 +100,25 @@ impl Factory {
         }
     }
 }
-impl BackupByteSourceFactory for Factory {
-    fn open(&mut self) -> Result<Box<dyn BackupByteSource>, BackupError> {
-        self.opens += 1;
-        let bytes = self
-            .versions
-            .pop_front()
-            .ok_or_else(|| BackupError::from_code(BackupErrorCode::IoError))?;
-        Ok(Box::new(Source {
-            bytes,
-            offset: 0,
-            max_read: self.max_read,
-            cancel_on_read: self.cancel_on_read,
-            cancelled: self.cancelled.clone(),
-            dropped: self.dropped.clone(),
-        }))
+
+fn open_discarding_output(
+    context: &BackupObjectContextV1,
+    source: &mut dyn BackupByteSource,
+    expected: &ExpectedBackupObjectV1,
+) -> Result<(), BackupError> {
+    struct DiscardSink;
+    impl BackupByteSink for DiscardSink {
+        fn write_chunk(&mut self, _: &[u8]) -> Result<(), BackupError> {
+            Ok(())
+        }
     }
-    fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
-    }
+    open_object_v1(context, source, expected, &mut DiscardSink)
 }
 
-fn verify(bytes: &[u8]) -> Result<(), BackupError> {
-    verify_object_envelope_v1(
+fn open_bytes(bytes: &[u8]) -> Result<(), BackupError> {
+    open_discarding_output(
         &context(ACCOUNT, 3, 7),
-        &mut Factory::new(bytes),
+        &mut Source::new(bytes),
         &expected(bytes),
     )
 }
@@ -162,47 +148,48 @@ fn frames(bytes: &[u8]) -> Vec<std::ops::Range<usize>> {
 }
 
 #[test]
-fn verifies_writer_output_with_empty_small_and_multiblock_payloads() {
+fn validates_writer_output_with_empty_small_and_multiblock_payloads() {
     for payload in [
         vec![],
         b"opaque bytes, not canonical chat records".to_vec(),
         noisy_payload(),
     ] {
         let bytes = seal(&payload);
-        let mut factory = Factory::new(&bytes);
-        factory.max_read = 7;
-        verify_object_envelope_v1(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
-            .unwrap();
-        assert_eq!(factory.opens, 2);
-        assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
+        let mut source = Source::new(&bytes);
+        source.max_read = 7;
+        open_discarding_output(&context(ACCOUNT, 3, 7), &mut source, &expected(&bytes)).unwrap();
     }
 }
 
 #[test]
-fn rejects_inventory_mismatch_before_opening_the_decryption_pass() {
+fn rejects_inventory_mismatch_in_the_single_pass() {
     let bytes = seal(b"private payload");
-    for metadata in [
-        ExpectedBackupObjectV1::new(bytes.len() as u64, [0; 32], 1).unwrap(),
-        ExpectedBackupObjectV1::new(bytes.len() as u64 - 1, Sha256::digest(&bytes).into(), 1)
-            .unwrap(),
-        ExpectedBackupObjectV1::new(bytes.len() as u64 + 1, Sha256::digest(&bytes).into(), 1)
-            .unwrap(),
+    for (metadata, releases_plaintext) in [
+        (
+            ExpectedBackupObjectV1::new(bytes.len() as u64, [0; 32], 1).unwrap(),
+            true,
+        ),
+        (
+            ExpectedBackupObjectV1::new(bytes.len() as u64 - 1, Sha256::digest(&bytes).into(), 1)
+                .unwrap(),
+            false,
+        ),
+        (
+            ExpectedBackupObjectV1::new(bytes.len() as u64 + 1, Sha256::digest(&bytes).into(), 1)
+                .unwrap(),
+            true,
+        ),
     ] {
-        let mut factory = Factory::new(&bytes);
-        let error = verify_object_envelope_v1(&context(ACCOUNT, 3, 7), &mut factory, &metadata)
-            .unwrap_err();
-        assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
-        assert_eq!(factory.opens, 1);
-        assert_eq!(factory.dropped.load(Ordering::Relaxed), 1);
-
-        let mut factory = Factory::new(&bytes);
+        let mut source = Source::new(&bytes);
         let mut sink = Sink::default();
-        let error = open_object_v1(&context(ACCOUNT, 3, 7), &mut factory, &metadata, &mut sink)
-            .unwrap_err();
+        let error =
+            open_object_v1(&context(ACCOUNT, 3, 7), &mut source, &metadata, &mut sink).unwrap_err();
         assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
-        assert!(sink.0.is_empty());
-        assert_eq!(factory.opens, 1);
-        assert_eq!(factory.dropped.load(Ordering::Relaxed), 1);
+        if releases_plaintext {
+            assert_eq!(sink.0, b"private payload");
+        } else {
+            assert!(sink.0.is_empty());
+        }
     }
 }
 
@@ -214,7 +201,7 @@ fn rejects_wrong_account_key_and_chunk_context() {
         context(ACCOUNT, 4, 7),
         context(ACCOUNT, 3, 8),
     ] {
-        let error = verify_object_envelope_v1(&wrong, &mut Factory::new(&bytes), &expected(&bytes))
+        let error = open_discarding_output(&wrong, &mut Source::new(&bytes), &expected(&bytes))
             .unwrap_err();
         assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
     }
@@ -226,7 +213,7 @@ fn rejects_unsupported_header_fields() {
         let mut bytes = seal(b"payload");
         bytes[index] ^= 0x80;
         assert_eq!(
-            verify(&bytes).unwrap_err().code(),
+            open_bytes(&bytes).unwrap_err().code(),
             BackupErrorCode::UnsupportedFormat
         );
     }
@@ -244,7 +231,7 @@ fn rejects_nonce_ciphertext_and_tag_corruption_even_with_recomputed_inventory_ha
         let mut bytes = original.clone();
         bytes[index] ^= 1;
         assert_eq!(
-            verify(&bytes).unwrap_err().code(),
+            open_bytes(&bytes).unwrap_err().code(),
             BackupErrorCode::AuthenticationFailed
         );
     }
@@ -256,7 +243,7 @@ fn rejects_invalid_lengths_without_allocating_them() {
         let mut bytes = seal(b"payload");
         bytes[29..33].copy_from_slice(&length.to_be_bytes());
         assert_eq!(
-            verify(&bytes).unwrap_err().code(),
+            open_bytes(&bytes).unwrap_err().code(),
             BackupErrorCode::MalformedObject
         );
     }
@@ -268,14 +255,14 @@ fn rejects_truncated_payload_and_partial_trailing_length() {
     let mut truncated = original.clone();
     truncated.pop();
     assert_eq!(
-        verify(&truncated).unwrap_err().code(),
+        open_bytes(&truncated).unwrap_err().code(),
         BackupErrorCode::MalformedObject
     );
     for count in 1..=3 {
         let mut bytes = original.clone();
         bytes.extend(vec![0; count]);
         assert_eq!(
-            verify(&bytes).unwrap_err().code(),
+            open_bytes(&bytes).unwrap_err().code(),
             BackupErrorCode::MalformedObject
         );
     }
@@ -288,7 +275,7 @@ fn rejects_missing_final_swapped_and_duplicated_full_frames() {
     assert!(ranges.len() >= 3);
     let without_final = &bytes[..ranges.last().unwrap().start];
     assert_eq!(
-        verify(without_final).unwrap_err().code(),
+        open_bytes(without_final).unwrap_err().code(),
         BackupErrorCode::AuthenticationFailed
     );
 
@@ -297,7 +284,7 @@ fn rejects_missing_final_swapped_and_duplicated_full_frames() {
     swapped.extend_from_slice(&bytes[ranges[0].clone()]);
     swapped.extend_from_slice(&bytes[ranges[2].start..]);
     assert_eq!(
-        verify(&swapped).unwrap_err().code(),
+        open_bytes(&swapped).unwrap_err().code(),
         BackupErrorCode::AuthenticationFailed
     );
 
@@ -305,7 +292,7 @@ fn rejects_missing_final_swapped_and_duplicated_full_frames() {
     duplicated.extend_from_slice(&bytes[ranges[0].clone()]);
     duplicated.extend_from_slice(&bytes[ranges[1].start..]);
     assert_eq!(
-        verify(&duplicated).unwrap_err().code(),
+        open_bytes(&duplicated).unwrap_err().code(),
         BackupErrorCode::AuthenticationFailed
     );
 }
@@ -316,52 +303,30 @@ fn rejects_complete_frame_after_final() {
     bytes.extend_from_slice(&16_u32.to_be_bytes());
     bytes.extend_from_slice(&[0; 16]);
     assert_eq!(
-        verify(&bytes).unwrap_err().code(),
+        open_bytes(&bytes).unwrap_err().code(),
         BackupErrorCode::MalformedObject
     );
 }
 
 #[test]
-fn rechecks_reopened_object_even_when_both_versions_have_valid_aead() {
+fn rejects_a_different_object_even_with_valid_aead() {
     let first = seal(b"same content");
     let second = seal(b"same content");
     assert_eq!(first.len(), second.len());
-    let mut factory = Factory::new(&first);
-    factory.versions[1] = second.into();
-    let error = verify_object_envelope_v1(&context(ACCOUNT, 3, 7), &mut factory, &expected(&first))
+    let mut source = Source::new(&second);
+    let error = open_discarding_output(&context(ACCOUNT, 3, 7), &mut source, &expected(&first))
         .unwrap_err();
     assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
-    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
 }
 
 #[test]
-fn integrity_failure_is_terminal_and_never_releases_plaintext() {
+fn authentication_failure_never_releases_plaintext() {
     let mut bytes = seal(b"sensitive plaintext");
     bytes[33] ^= 1;
-    let mut validator = BackupObjectValidatorV1::new();
-    let mut factory = Factory::new(&bytes);
-    assert_eq!(validator.state(), BackupValidationState::Ready);
-    let error = validator
-        .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
-        .unwrap_err();
-    assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
-    assert_eq!(validator.state(), BackupValidationState::Failed);
-    assert_eq!(
-        validator
-            .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
-            .unwrap_err()
-            .code(),
-        BackupErrorCode::InvalidState
-    );
-    assert_eq!(
-        validator.cancel().unwrap_err().code(),
-        BackupErrorCode::InvalidState
-    );
-
     let mut sink = Sink::default();
     let error = open_object_v1(
         &context(ACCOUNT, 3, 7),
-        &mut Factory::new(&bytes),
+        &mut Source::new(&bytes),
         &expected(&bytes),
         &mut sink,
     )
@@ -371,43 +336,24 @@ fn integrity_failure_is_terminal_and_never_releases_plaintext() {
 }
 
 #[test]
-fn cancellation_is_terminal_and_releases_open_sources() {
+fn cancellation_before_or_during_read_stops_without_output() {
     let bytes = seal(b"payload");
-    for before_open in [true, false] {
-        let mut factory = Factory::new(&bytes);
-        factory.cancelled.store(before_open, Ordering::Relaxed);
-        factory.cancel_on_read = !before_open;
-        let mut validator = BackupObjectValidatorV1::new();
-        let error = validator
-            .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
-            .unwrap_err();
-        assert_eq!(error.code(), BackupErrorCode::Cancelled);
-        assert_eq!(validator.state(), BackupValidationState::Cancelled);
-        assert_eq!(factory.dropped.load(Ordering::Relaxed), factory.opens);
-        assert_eq!(factory.opens, if before_open { 0 } else { 1 });
-    }
-    let mut validator = BackupObjectValidatorV1::new();
-    validator.cancel().unwrap();
-    let mut factory = Factory::new(&bytes);
-    assert_eq!(
-        validator
-            .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
-            .unwrap_err()
-            .code(),
-        BackupErrorCode::InvalidState
-    );
-    assert_eq!(factory.opens, 0);
-}
-
-#[test]
-fn propagates_reopen_failure_without_reporting_success() {
-    let bytes = seal(b"payload");
-    let mut factory = Factory::new(&bytes);
-    factory.versions.truncate(1);
-    let error = verify_object_envelope_v1(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
+    for before_read in [true, false] {
+        let mut source = Source::new(&bytes);
+        source.cancelled.store(before_read, Ordering::Relaxed);
+        source.cancel_on_read = !before_read;
+        let mut sink = Sink::default();
+        let error = open_object_v1(
+            &context(ACCOUNT, 3, 7),
+            &mut source,
+            &expected(&bytes),
+            &mut sink,
+        )
         .unwrap_err();
-    assert_eq!(error.code(), BackupErrorCode::IoError);
-    assert_eq!(factory.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(error.code(), BackupErrorCode::Cancelled);
+        assert_eq!(source.offset == 0, before_read);
+        assert!(sink.0.is_empty());
+    }
 }
 
 #[test]
@@ -435,12 +381,6 @@ fn handles_callback_faults_without_panicking_or_exposing_plaintext() {
             }
         }
     }
-    struct FaultyFactory(bool);
-    impl BackupByteSourceFactory for FaultyFactory {
-        fn open(&mut self) -> Result<Box<dyn BackupByteSource>, BackupError> {
-            Ok(Box::new(FaultySource(self.0)))
-        }
-    }
     let bytes = seal(b"payload");
     for (bad_count, code) in [
         (true, BackupErrorCode::InvalidState),
@@ -449,7 +389,7 @@ fn handles_callback_faults_without_panicking_or_exposing_plaintext() {
         let mut sink = Sink::default();
         let error = open_object_v1(
             &context(ACCOUNT, 3, 7),
-            &mut FaultyFactory(bad_count),
+            &mut FaultySource(bad_count),
             &expected(&bytes),
             &mut sink,
         )
@@ -457,30 +397,6 @@ fn handles_callback_faults_without_panicking_or_exposing_plaintext() {
         assert_eq!(error.code(), code);
         assert!(sink.0.is_empty());
     }
-}
-
-#[test]
-fn cancellation_after_reopen_drops_the_second_handle() {
-    struct CancelsOnReopen(Factory);
-    impl BackupByteSourceFactory for CancelsOnReopen {
-        fn open(&mut self) -> Result<Box<dyn BackupByteSource>, BackupError> {
-            let source = self.0.open()?;
-            if self.0.opens == 2 {
-                self.0.cancelled.store(true, Ordering::Relaxed);
-            }
-            Ok(source)
-        }
-        fn is_cancelled(&self) -> bool {
-            self.0.is_cancelled()
-        }
-    }
-    let bytes = seal(b"payload");
-    let mut factory = CancelsOnReopen(Factory::new(&bytes));
-    let error = verify_object_envelope_v1(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
-        .unwrap_err();
-    assert_eq!(error.code(), BackupErrorCode::Cancelled);
-    assert_eq!(factory.0.opens, 2);
-    assert_eq!(factory.0.dropped.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -494,9 +410,9 @@ fn rejects_each_truncation_point_of_a_small_object() {
             Err(e) => assert_eq!(e.code(), BackupErrorCode::InvalidArgument),
             Ok(metadata) => {
                 assert!(
-                    verify_object_envelope_v1(
+                    open_discarding_output(
                         &context(ACCOUNT, 3, 7),
-                        &mut Factory::new(bytes),
+                        &mut Source::new(bytes),
                         &metadata
                     )
                     .is_err()
@@ -507,7 +423,7 @@ fn rejects_each_truncation_point_of_a_small_object() {
 }
 
 #[test]
-fn opens_opaque_writer_objects_using_only_two_sources() {
+fn opens_opaque_writer_objects_reading_each_byte_once() {
     for plaintext in [
         vec![],
         b"opaque payload".to_vec(),
@@ -515,60 +431,43 @@ fn opens_opaque_writer_objects_using_only_two_sources() {
         vec![42; 300_000],
     ] {
         let bytes = seal(&plaintext);
-        let mut factory = Factory::new(&bytes);
-        factory.max_read = 11;
+        let mut source = Source::new(&bytes);
+        source.max_read = 11;
         let mut sink = Sink::default();
         open_object_v1(
             &context(ACCOUNT, 3, 7),
-            &mut factory,
+            &mut source,
             &expected(&bytes),
             &mut sink,
         )
         .unwrap();
         assert_eq!(sink.0, plaintext);
-        assert_eq!(factory.opens, 2);
-        assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
+        assert_eq!(source.offset, bytes.len());
+        assert_eq!(source.eof_reads, 1);
+        assert_eq!(source.dropped.load(Ordering::Relaxed), 0);
+        let dropped = source.dropped.clone();
+        drop(source);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
 }
 
 #[test]
-fn validator_completes_once_without_opening_an_output_pass() {
-    let bytes = seal(b"payload");
-    let mut factory = Factory::new(&bytes);
-    let mut validator = BackupObjectValidatorV1::new();
-    validator
-        .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
-        .unwrap();
-    assert_eq!(validator.state(), BackupValidationState::Completed);
-    assert_eq!(factory.opens, 2);
-    assert_eq!(
-        validator
-            .validate(&context(ACCOUNT, 3, 7), &mut factory, &expected(&bytes))
-            .unwrap_err()
-            .code(),
-        BackupErrorCode::InvalidState
-    );
-}
-
-#[test]
-fn corrupted_reopened_nonce_or_first_frame_never_reaches_sink() {
+fn corrupted_nonce_or_first_frame_never_reaches_sink() {
     let bytes = seal(b"payload");
     for index in [10, 33, bytes.len() - 1] {
         let mut changed = bytes.clone();
         changed[index] ^= 1;
-        let mut factory = Factory::new(&bytes);
-        factory.versions[1] = changed.into();
+        let mut source = Source::new(&changed);
         let mut sink = Sink::default();
         let error = open_object_v1(
             &context(ACCOUNT, 3, 7),
-            &mut factory,
+            &mut source,
             &expected(&bytes),
             &mut sink,
         )
         .unwrap_err();
         assert_eq!(error.code(), BackupErrorCode::AuthenticationFailed);
         assert!(sink.0.is_empty());
-        assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
     }
 }
 
@@ -577,20 +476,17 @@ fn valid_replacement_is_rejected_at_completion_even_after_output() {
     let original = seal(b"payload-A");
     let replacement = seal(b"payload-B");
     assert_eq!(original.len(), replacement.len());
-    let mut factory = Factory::new(&original);
-    factory.versions[1] = replacement.into();
+    let mut source = Source::new(&replacement);
     let mut staging = Sink::default();
     let error = open_object_v1(
         &context(ACCOUNT, 3, 7),
-        &mut factory,
+        &mut source,
         &expected(&original),
         &mut staging,
     )
     .unwrap_err();
     assert_eq!(error.code(), BackupErrorCode::IntegrityMismatch);
     assert_eq!(staging.0, b"payload-B");
-    assert_eq!(factory.opens, 2);
-    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -600,12 +496,11 @@ fn corrupted_late_frame_leaves_only_an_authenticated_prefix() {
     let mut changed = bytes.clone();
     let last = frames(&bytes).last().unwrap().clone();
     changed[last.start + 4] ^= 1;
-    let mut factory = Factory::new(&bytes);
-    factory.versions[1] = changed.into();
+    let mut source = Source::new(&changed);
     let mut sink = Sink::default();
     let error = open_object_v1(
         &context(ACCOUNT, 3, 7),
-        &mut factory,
+        &mut source,
         &expected(&bytes),
         &mut sink,
     )
@@ -614,7 +509,6 @@ fn corrupted_late_frame_leaves_only_an_authenticated_prefix() {
     assert!(!sink.0.is_empty());
     assert!(sink.0.len() < plaintext.len());
     assert_eq!(sink.0, plaintext[..sink.0.len()]);
-    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -629,11 +523,11 @@ fn sink_errors_are_propagated() {
     }
     let bytes = seal(b"payload");
     let mut sink = FailingSink(0);
-    let mut factory = Factory::new(&bytes);
+    let mut source = Source::new(&bytes);
     assert_eq!(
         open_object_v1(
             &context(ACCOUNT, 3, 7),
-            &mut factory,
+            &mut source,
             &expected(&bytes),
             &mut sink
         )
@@ -642,7 +536,6 @@ fn sink_errors_are_propagated() {
         BackupErrorCode::IoError
     );
     assert_eq!(sink.0, 1);
-    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -657,12 +550,12 @@ fn cancellation_inside_output_stops_without_more_callbacks() {
     }
     let plaintext = vec![42; 300_000];
     let bytes = seal(&plaintext);
-    let mut factory = Factory::new(&bytes);
-    let mut sink = CancelSink(factory.cancelled.clone(), 0);
+    let mut source = Source::new(&bytes);
+    let mut sink = CancelSink(source.cancelled.clone(), 0);
     assert_eq!(
         open_object_v1(
             &context(ACCOUNT, 3, 7),
-            &mut factory,
+            &mut source,
             &expected(&bytes),
             &mut sink
         )
@@ -671,6 +564,4 @@ fn cancellation_inside_output_stops_without_more_callbacks() {
         BackupErrorCode::Cancelled
     );
     assert_eq!(sink.1, 1);
-    assert_eq!(factory.opens, 2);
-    assert_eq!(factory.dropped.load(Ordering::Relaxed), 2);
 }

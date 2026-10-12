@@ -21,7 +21,6 @@ pub use limits::{
     MAX_ZSTD_WINDOW_BYTES_V1,
 };
 pub use object::{
-    BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupObjectDescriptor,
-    BackupObjectValidatorV1, BackupObjectWriterV1, BackupValidationState, ExpectedBackupObjectV1,
-    copy_opaque_bytes_v1, open_object_v1, seal_object_v1, verify_object_envelope_v1,
+    BackupByteSink, BackupByteSource, BackupObjectDescriptor, BackupObjectWriterV1,
+    ExpectedBackupObjectV1, copy_opaque_bytes_v1, open_object_v1, seal_object_v1,
 };

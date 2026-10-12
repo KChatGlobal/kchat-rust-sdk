@@ -6,26 +6,19 @@ use std::sync::{
 };
 
 use kchat_backup::{
-    BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupError, BackupErrorCode,
-    ExpectedBackupObjectV1, MAX_IO_CHUNK_BYTES_V1, open_object_v1,
+    BackupByteSink, BackupByteSource, BackupError, BackupErrorCode, ExpectedBackupObjectV1,
+    MAX_IO_CHUNK_BYTES_V1, open_object_v1,
 };
 use zeroize::Zeroizing;
 
 use super::{BackupFfiError, BackupMasterKey, BackupObjectMetadata};
-
-/// Open the same immutable ciphertext from offset zero on each call.
-#[uniffi::export(with_foreign)]
-pub trait BackupCiphertextSourceFactory: Send + Sync {
-    fn open(&self) -> Result<Arc<dyn BackupCiphertextSource>, BackupFfiError>;
-    fn is_cancelled(&self) -> Result<bool, BackupFfiError>;
-}
 
 #[uniffi::export(with_foreign)]
 pub trait BackupCiphertextSource: Send + Sync {
     /// An empty array means permanent EOF.
     fn read_chunk(&self, maximum_bytes: u32) -> Result<Vec<u8>, BackupFfiError>;
     fn is_cancelled(&self) -> Result<bool, BackupFfiError>;
-    /// Called after each pass, including failed reads.
+    /// Called once when the operation ends, including validation and read failures.
     fn release_stream(&self) -> Result<(), BackupFfiError>;
 }
 
@@ -41,10 +34,15 @@ pub fn open_backup_object_v1(
     key: Arc<BackupMasterKey>,
     account_id: String,
     chunk_id: Vec<u8>,
-    factory: Arc<dyn BackupCiphertextSourceFactory>,
+    source: Arc<dyn BackupCiphertextSource>,
     metadata: BackupObjectMetadata,
     sink: Arc<dyn BackupPlaintextSink>,
 ) -> Result<(), BackupFfiError> {
+    let callback_failed = Arc::new(AtomicBool::new(false));
+    let mut source_adapter = SourceAdapter {
+        source,
+        callback_failed: Arc::clone(&callback_failed),
+    };
     let backup_id = key.derive_backup_id(account_id.clone())?;
     let context = key.create_object_context(account_id, backup_id, chunk_id)?;
     let expected_hash: [u8; 32] = metadata
@@ -57,15 +55,10 @@ pub fn open_backup_object_v1(
         metadata.format_version,
     )?;
 
-    let callback_failed = Arc::new(AtomicBool::new(false));
-    let mut factory_adapter = FactoryAdapter {
-        factory,
-        callback_failed: Arc::clone(&callback_failed),
-    };
     let mut sink_adapter = SinkAdapter { sink };
     let result = open_object_v1(
         context.as_core(),
-        &mut factory_adapter,
+        &mut source_adapter,
         &expected,
         &mut sink_adapter,
     );
@@ -74,28 +67,6 @@ pub fn open_backup_object_v1(
         return Err(BackupFfiError::IoError);
     }
     result.map_err(Into::into)
-}
-
-struct FactoryAdapter {
-    factory: Arc<dyn BackupCiphertextSourceFactory>,
-    callback_failed: Arc<AtomicBool>,
-}
-
-impl BackupByteSourceFactory for FactoryAdapter {
-    fn open(&mut self) -> Result<Box<dyn BackupByteSource>, BackupError> {
-        let source = self
-            .factory
-            .open()
-            .map_err(|_| BackupError::from_code(BackupErrorCode::IoError))?;
-        Ok(Box::new(SourceAdapter {
-            source,
-            callback_failed: Arc::clone(&self.callback_failed),
-        }))
-    }
-
-    fn is_cancelled(&self) -> bool {
-        callback_cancelled(&self.callback_failed, self.factory.is_cancelled())
-    }
 }
 
 struct SourceAdapter {

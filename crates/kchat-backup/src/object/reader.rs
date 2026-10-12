@@ -6,9 +6,8 @@ use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
-    BackupByteSink, BackupByteSource, BackupByteSourceFactory, BackupError, BackupErrorCode,
-    BackupObjectContextV1, BackupObjectDescriptor, MAX_CIPHERTEXT_OBJECT_BYTES_V1,
-    MAX_COMPRESSED_OBJECT_BYTES_V1, MAX_ENCRYPTED_BLOCKS_PER_OBJECT_V1, MAX_IO_CHUNK_BYTES_V1,
+    BackupByteSink, BackupByteSource, BackupError, BackupErrorCode, BackupObjectContextV1,
+    BackupObjectDescriptor, MAX_CIPHERTEXT_OBJECT_BYTES_V1, MAX_IO_CHUNK_BYTES_V1,
 };
 
 use super::{
@@ -57,78 +56,22 @@ impl From<BackupObjectDescriptor> for ExpectedBackupObjectV1 {
     }
 }
 
-/// Verify ciphertext integrity and AEAD; skip Zstd and payload validation.
-pub fn verify_object_envelope_v1(
-    context: &BackupObjectContextV1,
-    factory: &mut dyn BackupByteSourceFactory,
-    expected: &ExpectedBackupObjectV1,
-) -> Result<(), BackupError> {
-    preflight(factory, expected)?;
-    let mut input = CheckedSource::open(factory, expected)?;
-    authenticate_envelope(context, &mut input, &mut |_, _| Ok(()))?;
-    input.finish()
-}
-
-/// Preflight ciphertext, then decrypt and decompress it without parsing payloads.
-/// Output is provisional; discard staged bytes on any error.
+/// Decrypt, decompress, and verify ciphertext in one pass without parsing payloads.
 pub fn open_object_v1(
     context: &BackupObjectContextV1,
-    factory: &mut dyn BackupByteSourceFactory,
+    source: &mut dyn BackupByteSource,
     expected: &ExpectedBackupObjectV1,
     sink: &mut dyn BackupByteSink,
 ) -> Result<(), BackupError> {
-    preflight(factory, expected)?;
-    process_payload(context, factory, expected, &mut |bytes| {
-        sink.write_chunk(bytes)
-    })
-}
-
-fn preflight(
-    factory: &mut dyn BackupByteSourceFactory,
-    expected: &ExpectedBackupObjectV1,
-) -> Result<(), BackupError> {
-    let mut input = CheckedSource::open(factory, expected)?;
-    let mut buffer = [0; MAX_IO_CHUNK_BYTES_V1];
-    while input.read(&mut buffer)? != 0 {}
-    input.finish()
-}
-
-pub(super) fn validate_payload_v1(
-    context: &BackupObjectContextV1,
-    factory: &mut dyn BackupByteSourceFactory,
-    expected: &ExpectedBackupObjectV1,
-) -> Result<(), BackupError> {
-    preflight(factory, expected)?;
-    process_payload(context, factory, expected, &mut |_| Ok(()))?;
-    check_factory_cancelled(factory)
-}
-
-fn process_payload(
-    context: &BackupObjectContextV1,
-    factory: &mut dyn BackupByteSourceFactory,
-    expected: &ExpectedBackupObjectV1,
-    emit: &mut dyn FnMut(&[u8]) -> Result<(), BackupError>,
-) -> Result<(), BackupError> {
-    let mut input = CheckedSource::open(factory, expected)?;
+    let mut input = CheckedSource::new(source, expected)?;
     let mut decoder = BoundedDecoder::new()?;
-    authenticate_envelope(context, &mut input, &mut |bytes, cancelled| {
-        decoder.push(bytes, emit, cancelled)
-    })?;
+    authenticate_envelope(context, &mut input, &mut decoder, sink)?;
     input.finish()?;
     decoder.finish()
 }
 
-fn check_factory_cancelled(factory: &dyn BackupByteSourceFactory) -> Result<(), BackupError> {
-    if factory.is_cancelled() {
-        Err(BackupError::cancelled())
-    } else {
-        Ok(())
-    }
-}
-
 struct CheckedSource<'a> {
-    source: Box<dyn BackupByteSource>,
-    factory: &'a dyn BackupByteSourceFactory,
+    source: &'a mut dyn BackupByteSource,
     expected: &'a ExpectedBackupObjectV1,
     bytes: u64,
     hash: Sha256,
@@ -136,17 +79,12 @@ struct CheckedSource<'a> {
 }
 
 impl<'a> CheckedSource<'a> {
-    fn open(
-        factory: &'a mut dyn BackupByteSourceFactory,
+    fn new(
+        source: &'a mut dyn BackupByteSource,
         expected: &'a ExpectedBackupObjectV1,
     ) -> Result<Self, BackupError> {
-        if factory.is_cancelled() {
-            return Err(BackupError::cancelled());
-        }
-        let source = factory.open()?;
         let input = Self {
             source,
-            factory,
             expected,
             bytes: 0,
             hash: Sha256::new(),
@@ -157,7 +95,7 @@ impl<'a> CheckedSource<'a> {
     }
 
     fn check_cancelled(&self) -> Result<(), BackupError> {
-        if self.factory.is_cancelled() || self.source.is_cancelled() {
+        if self.source.is_cancelled() {
             Err(BackupError::cancelled())
         } else {
             Ok(())
@@ -166,7 +104,7 @@ impl<'a> CheckedSource<'a> {
 
     fn read(&mut self, destination: &mut [u8]) -> Result<usize, BackupError> {
         self.check_cancelled()?;
-        if self.eof || destination.is_empty() {
+        if self.eof {
             return Ok(0);
         }
         let remaining_with_probe = (self.expected.ciphertext_size - self.bytes + 1) as usize;
@@ -225,13 +163,11 @@ impl<'a> CheckedSource<'a> {
     }
 }
 
-type CompressedConsumer<'a> =
-    dyn FnMut(&[u8], &dyn Fn() -> Result<(), BackupError>) -> Result<(), BackupError> + 'a;
-
 fn authenticate_envelope(
     context: &BackupObjectContextV1,
     input: &mut CheckedSource<'_>,
-    consume: &mut CompressedConsumer<'_>,
+    decoder: &mut BoundedDecoder,
+    sink: &mut dyn BackupByteSink,
 ) -> Result<(), BackupError> {
     let mut header = [0; ENVELOPE_HEADER_BYTES];
     input.read_exact(&mut header)?;
@@ -248,13 +184,10 @@ fn authenticate_envelope(
         .next_length()?
         .ok_or_else(|| BackupError::from_code(BackupErrorCode::MalformedObject))?;
     let mut frame = vec![0; COMPRESSED_BLOCK_BYTES + AEAD_TAG_BYTES];
-    let mut blocks = 0_u64;
-    let mut compressed_bytes = 0_u64;
+    // V1's 256 MiB ciphertext cap also bounds compressed bytes to <256 MiB.
+    // Full-sized NEXT frames limit the object to at most 4,095 blocks,
+    // below the 4,096-block limit, so separate counters are unnecessary.
     loop {
-        blocks += 1;
-        if blocks > MAX_ENCRYPTED_BLOCKS_PER_OBJECT_V1 {
-            return Err(BackupError::resource_limit_exceeded());
-        }
         input.read_exact(&mut frame[..length])?;
         let next = input.next_length()?;
         if next.is_some() && length != COMPRESSED_BLOCK_BYTES + AEAD_TAG_BYTES {
@@ -271,25 +204,22 @@ fn authenticate_envelope(
                     .decrypt_last(payload)
                     .map_err(|_| BackupError::authentication_failed())?;
                 let decrypted = Zeroizing::new(decrypted);
-                count_compressed(&mut compressed_bytes, decrypted.len())?;
                 input.check_cancelled()?;
-                consume(&decrypted, &|| input.check_cancelled())?;
-                return Ok(());
+                return decoder.push(
+                    &decrypted,
+                    &mut |plaintext| sink.write_chunk(plaintext),
+                    &|| input.check_cancelled(),
+                );
             }
         }
         .map_err(|_| BackupError::authentication_failed())?;
         let decrypted = Zeroizing::new(decrypted);
-        count_compressed(&mut compressed_bytes, decrypted.len())?;
         input.check_cancelled()?;
-        consume(&decrypted, &|| input.check_cancelled())?;
+        decoder.push(
+            &decrypted,
+            &mut |plaintext| sink.write_chunk(plaintext),
+            &|| input.check_cancelled(),
+        )?;
         length = next.ok_or_else(BackupError::invalid_state)?;
     }
-}
-
-fn count_compressed(total: &mut u64, added: usize) -> Result<(), BackupError> {
-    *total = total
-        .checked_add(added as u64)
-        .filter(|value| *value <= MAX_COMPRESSED_OBJECT_BYTES_V1)
-        .ok_or_else(BackupError::resource_limit_exceeded)?;
-    Ok(())
 }

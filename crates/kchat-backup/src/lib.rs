@@ -22,5 +22,5 @@ pub use limits::{
 };
 pub use object::{
     BackupByteSink, BackupByteSource, BackupObjectDescriptor, BackupObjectWriterV1,
-    ExpectedBackupObjectV1, copy_opaque_bytes_v1, open_object_v1, seal_object_v1,
+    copy_opaque_bytes_v1, open_object_v1, seal_object_v1,
 };

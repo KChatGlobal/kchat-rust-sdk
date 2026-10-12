@@ -6,12 +6,12 @@ use std::sync::{
 };
 
 use kchat_backup::{
-    BackupByteSink, BackupByteSource, BackupError, BackupErrorCode, ExpectedBackupObjectV1,
-    MAX_IO_CHUNK_BYTES_V1, open_object_v1,
+    BackupByteSink, BackupByteSource, BackupError, BackupErrorCode, MAX_IO_CHUNK_BYTES_V1,
+    open_object_v1,
 };
 use zeroize::Zeroizing;
 
-use super::{BackupFfiError, BackupMasterKey, BackupObjectMetadata};
+use super::{BackupFfiError, BackupMasterKey};
 
 #[uniffi::export(with_foreign)]
 pub trait BackupCiphertextSource: Send + Sync {
@@ -35,7 +35,6 @@ pub fn open_backup_object_v1(
     account_id: String,
     chunk_id: Vec<u8>,
     source: Arc<dyn BackupCiphertextSource>,
-    metadata: BackupObjectMetadata,
     sink: Arc<dyn BackupPlaintextSink>,
 ) -> Result<(), BackupFfiError> {
     let callback_failed = Arc::new(AtomicBool::new(false));
@@ -45,23 +44,8 @@ pub fn open_backup_object_v1(
     };
     let backup_id = key.derive_backup_id(account_id.clone())?;
     let context = key.create_object_context(account_id, backup_id, chunk_id)?;
-    let expected_hash: [u8; 32] = metadata
-        .ciphertext_sha256
-        .try_into()
-        .map_err(|_| BackupFfiError::InvalidArgument)?;
-    let expected = ExpectedBackupObjectV1::new(
-        metadata.ciphertext_size,
-        expected_hash,
-        metadata.format_version,
-    )?;
-
     let mut sink_adapter = SinkAdapter { sink };
-    let result = open_object_v1(
-        context.as_core(),
-        &mut source_adapter,
-        &expected,
-        &mut sink_adapter,
-    );
+    let result = open_object_v1(context.as_core(), &mut source_adapter, &mut sink_adapter);
     // Report cancellation callback failures as I/O errors.
     if callback_failed.load(Ordering::Relaxed) {
         return Err(BackupFfiError::IoError);

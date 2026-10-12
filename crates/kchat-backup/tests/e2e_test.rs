@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use kchat_backup::{
     BackupAccountId, BackupByteSink, BackupByteSource, BackupChunkId, BackupError, BackupId,
-    BackupObjectContextV1, DescriptorBackupModeV1, DescriptorHeaderV1, ExpectedBackupObjectV1,
-    MnemonicBackupKey, open_descriptor_v1, open_object_v1, seal_descriptor_v1, seal_object_v1,
+    BackupObjectContextV1, DescriptorBackupModeV1, DescriptorHeaderV1, MnemonicBackupKey,
+    open_descriptor_v1, open_object_v1, seal_descriptor_v1, seal_object_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -51,9 +51,6 @@ impl BackupByteSink for MemorySink {
 struct StoredChunk {
     descriptor: Arc<[u8]>,
     ciphertext: Arc<[u8]>,
-    ciphertext_size: u64,
-    ciphertext_sha256: [u8; 32],
-    format_version: u16,
 }
 
 #[test]
@@ -96,9 +93,6 @@ fn encrypt_upload_download_verify_and_decrypt_json() {
     let server = StoredChunk {
         descriptor: sealed_descriptor.into(),
         ciphertext: upload_sink.0.into(),
-        ciphertext_size: writer_metadata.ciphertext_size(),
-        ciphertext_sha256: *writer_metadata.ciphertext_sha256(),
-        format_version: writer_metadata.format_version(),
     };
 
     let restore_master = MnemonicBackupKey::import_from_raw(&TEST_MASTER_KEY).unwrap();
@@ -112,18 +106,12 @@ fn encrypt_upload_download_verify_and_decrypt_json() {
     assert_eq!(restore_backup_id, backup_id);
     let restore_context = object_context(&restore_master, restore_account, restore_backup_id);
 
-    let expected = ExpectedBackupObjectV1::new(
-        server.ciphertext_size,
-        server.ciphertext_sha256,
-        server.format_version,
-    )
-    .unwrap();
     let mut restore_sink = MemorySink::default();
     let mut source = MemorySource {
         bytes: server.ciphertext.clone(),
         offset: 0,
     };
-    open_object_v1(&restore_context, &mut source, &expected, &mut restore_sink).unwrap();
+    open_object_v1(&restore_context, &mut source, &mut restore_sink).unwrap();
 
     assert_eq!(source.offset, server.ciphertext.len());
     assert_eq!(restore_sink.0, JSON);

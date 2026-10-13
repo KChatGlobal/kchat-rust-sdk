@@ -27,6 +27,7 @@ use uq_openmls::{
 };
 
 pub mod error;
+pub mod mnemonic;
 pub use self::error::Error;
 
 #[uniffi::export(with_foreign)]

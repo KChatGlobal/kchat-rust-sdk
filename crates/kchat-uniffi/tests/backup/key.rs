@@ -155,7 +155,7 @@ fn rejects_an_object_context_with_a_mismatched_backup_id() {
     assert!(matches!(
         generated
             .key
-            .create_object_context(ACCOUNT.to_owned(), vec![0; 32], vec![1; 16]),
+            .create_object_context(ACCOUNT.to_owned(), vec![0; 32], vec![1; 32]),
         Err(BackupFfiError::ContextMismatch)
     ));
 }

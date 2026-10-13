@@ -118,7 +118,7 @@ fn context() -> Arc<BackupObjectContext> {
     let backup_id = generated.key.derive_backup_id(ACCOUNT.to_owned()).unwrap();
     generated
         .key
-        .create_object_context(ACCOUNT.to_owned(), backup_id, vec![1; 16])
+        .create_object_context(ACCOUNT.to_owned(), backup_id, vec![1; 32])
         .unwrap()
 }
 

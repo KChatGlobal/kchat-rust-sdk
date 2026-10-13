@@ -114,7 +114,7 @@ fn context() -> BackupObjectContextV1 {
     let master_key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
     let account = BackupAccountId::parse("00112233-4455-6677-8899-aabbccddeeff").unwrap();
     let backup_id = BackupId::derive(&master_key, &account).unwrap();
-    let chunk_id = BackupChunkId::from_bytes([7; 16]).unwrap();
+    let chunk_id = BackupChunkId::from_bytes([7; 32]).unwrap();
     BackupObjectContextV1::new(&master_key, account, backup_id, 1, chunk_id).unwrap()
 }
 

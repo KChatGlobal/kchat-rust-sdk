@@ -10,9 +10,7 @@ use sha2::{Digest, Sha256};
 const JSON: &[u8] = br#"{"name": "alice", "age":18}"#;
 const ACCOUNT_ID: &str = "00112233-4455-6677-8899-aabbccddeeff";
 const TEST_MASTER_KEY: [u8; 32] = [0x5a; 32];
-const CHUNK_ID: [u8; 16] = [
-    0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x40, 0xde, 0x80, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde,
-];
+const CHUNK_ID: [u8; 32] = [7; 32];
 
 fn object_context(
     master: &MnemonicBackupKey,

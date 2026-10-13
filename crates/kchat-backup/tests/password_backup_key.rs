@@ -84,7 +84,7 @@ fn derives_an_account_independent_password_master_key_from_exact_raw_bytes_and_s
         BackupId::derive(&other_salt_key, &account).unwrap()
     );
 
-    let chunk = BackupChunkId::from_bytes([0x33; 16]).unwrap();
+    let chunk = BackupChunkId::from_bytes([0x33; 32]).unwrap();
     let context = BackupObjectContextV1::new(&key, account, backup_id, 1, chunk).unwrap();
     let same_context = BackupObjectContextV1::new(&same_key, account, backup_id, 1, chunk).unwrap();
     assert_eq!(context.canonical_bytes(), same_context.canonical_bytes());

@@ -86,7 +86,7 @@ fn context() -> (Arc<BackupMasterKey>, Arc<BackupObjectContext>) {
     let backup_id = generated.key.derive_backup_id(ACCOUNT.to_owned()).unwrap();
     let context = generated
         .key
-        .create_object_context(ACCOUNT.to_owned(), backup_id, vec![7; 16])
+        .create_object_context(ACCOUNT.to_owned(), backup_id, vec![7; 32])
         .unwrap();
     (generated.key, context)
 }
@@ -109,7 +109,7 @@ fn kotlin_style_callbacks_seal_and_open_the_same_json() {
     open_backup_object_v1(
         key,
         ACCOUNT.to_owned(),
-        vec![7; 16],
+        vec![7; 32],
         source.clone(),
         plaintext_sink.clone(),
     )
@@ -125,7 +125,7 @@ fn opens_an_object_for_both_key_modes() {
         let key = import_from_raw(mode, vec![42; 32]).unwrap();
         let backup_id = key.derive_backup_id(ACCOUNT.to_owned()).unwrap();
         let context = key
-            .create_object_context(ACCOUNT.to_owned(), backup_id, vec![7; 16])
+            .create_object_context(ACCOUNT.to_owned(), backup_id, vec![7; 32])
             .unwrap();
         let ciphertext_sink = Arc::new(CiphertextSink::default());
         seal_backup_object_v1(
@@ -142,7 +142,7 @@ fn opens_an_object_for_both_key_modes() {
         open_backup_object_v1(
             Arc::clone(&key),
             ACCOUNT.to_owned(),
-            vec![7; 16],
+            vec![7; 32],
             source.clone(),
             plaintext_sink.clone(),
         )
@@ -158,7 +158,7 @@ fn open_rejects_invalid_identity() {
     let key = import_from_raw(BackupKeyMode::Mnemonic, vec![42; 32]).unwrap();
     let backup_id = key.derive_backup_id(ACCOUNT.to_owned()).unwrap();
     let context = key
-        .create_object_context(ACCOUNT.to_owned(), backup_id, vec![7; 16])
+        .create_object_context(ACCOUNT.to_owned(), backup_id, vec![7; 32])
         .unwrap();
     let ciphertext_sink = Arc::new(CiphertextSink::default());
     seal_backup_object_v1(
@@ -169,13 +169,14 @@ fn open_rejects_invalid_identity() {
     .unwrap();
 
     for (account, chunk, expected_error) in [
-        ("invalid", vec![7; 16], BackupFfiError::InvalidArgument),
+        ("invalid", vec![7; 32], BackupFfiError::InvalidArgument),
         (ACCOUNT, vec![7; 15], BackupFfiError::InvalidArgument),
-        (ACCOUNT, vec![0; 16], BackupFfiError::InvalidArgument),
-        (ACCOUNT, vec![8; 16], BackupFfiError::AuthenticationFailed),
+        (ACCOUNT, vec![7; 16], BackupFfiError::InvalidArgument),
+        (ACCOUNT, vec![0; 32], BackupFfiError::InvalidArgument),
+        (ACCOUNT, vec![8; 32], BackupFfiError::AuthenticationFailed),
         (
             "10112233-4455-6677-8899-aabbccddeeff",
-            vec![7; 16],
+            vec![7; 32],
             BackupFfiError::AuthenticationFailed,
         ),
     ] {
@@ -231,7 +232,7 @@ fn failed_cancellation_callback_is_sanitized_to_io_error() {
         open_backup_object_v1(
             key,
             ACCOUNT.to_owned(),
-            vec![7; 16],
+            vec![7; 32],
             Arc::new(FailedCancellationCallback),
             plaintext_sink.clone(),
         ),

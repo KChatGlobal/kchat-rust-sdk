@@ -45,7 +45,7 @@ fn validates_backup_id_before_constructing_an_object_context() {
     let other_account = BackupAccountId::parse("ffeeddcc-bbaa-9988-7766-554433221100").unwrap();
     let backup_id = BackupId::derive(&master_key, &account).unwrap();
     let wrong_backup_id = BackupId::derive(&master_key, &other_account).unwrap();
-    let chunk = BackupChunkId::from_bytes([0x11; 16]).unwrap();
+    let chunk = BackupChunkId::from_bytes([0x11; 32]).unwrap();
     assert_eq!(
         BackupObjectContextV1::new(&master_key, account, wrong_backup_id, 1, chunk)
             .unwrap_err()
@@ -60,15 +60,15 @@ fn encodes_a_validated_object_context_with_fixed_big_endian_fields() {
     let master_key = MnemonicBackupKey::from_mnemonic(MNEMONIC).unwrap();
     let account = BackupAccountId::parse(ACCOUNT_ID).unwrap();
     let backup_id = BackupId::derive(&master_key, &account).unwrap();
-    let chunk = BackupChunkId::from_bytes([0xaa; 16]).unwrap();
+    let chunk = BackupChunkId::from_bytes([0xaa; 32]).unwrap();
     let context = BackupObjectContextV1::new(&master_key, account, backup_id, 1, chunk).unwrap();
     let mut expected = b"KCHAT_BACKUP_OBJECT_CONTEXT_V1".to_vec();
     expected.extend_from_slice(&[0x00, 0x01]);
     expected.extend_from_slice(backup_id.as_bytes());
-    expected.extend_from_slice(&[0xaa; 16]);
+    expected.extend_from_slice(&[0xaa; 32]);
     assert_eq!(context.canonical_bytes(), expected.as_slice());
     assert_eq!(
-        BackupChunkId::from_bytes([0; 16]).unwrap_err().code(),
+        BackupChunkId::from_bytes([0; 32]).unwrap_err().code(),
         BackupErrorCode::InvalidArgument
     );
     assert_eq!(

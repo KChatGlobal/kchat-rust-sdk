@@ -18,7 +18,7 @@ fn context(account: &str, key: u8, chunk: u8) -> BackupObjectContextV1 {
         account,
         namespace,
         1,
-        BackupChunkId::from_bytes([chunk; 16]).unwrap(),
+        BackupChunkId::from_bytes([chunk; 32]).unwrap(),
     )
     .unwrap()
 }

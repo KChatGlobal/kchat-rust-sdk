@@ -7,7 +7,7 @@ use crate::{
 
 pub const BACKUP_FORMAT_VERSION_V1: u16 = 1;
 const OBJECT_CONTEXT_LABEL: &[u8] = b"KCHAT_BACKUP_OBJECT_CONTEXT_V1";
-const CANONICAL_CONTEXT_LENGTH: usize = OBJECT_CONTEXT_LABEL.len() + 2 + 32 + 16;
+const CANONICAL_CONTEXT_LENGTH: usize = OBJECT_CONTEXT_LABEL.len() + 2 + 32 + 32;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct BackupId([u8; 32]);
@@ -33,17 +33,17 @@ impl core::fmt::Debug for BackupId {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub struct BackupChunkId([u8; 16]);
+pub struct BackupChunkId([u8; 32]);
 
 impl BackupChunkId {
-    pub fn from_bytes(bytes: [u8; 16]) -> Result<Self, BackupError> {
-        if bytes == [0; 16] {
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, BackupError> {
+        if bytes == [0; 32] {
             return Err(BackupError::invalid_argument());
         }
         Ok(Self(bytes))
     }
 
-    const fn as_bytes(&self) -> &[u8; 16] {
+    const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -59,7 +59,7 @@ pub struct BackupObjectContextV1 {
     /// "KCHAT_BACKUP_OBJECT_CONTEXT_V1"
     /// || format_version:u16-be
     /// || backup_id:[u8; 32]
-    /// || chunk_id:[u8; 16]
+    /// || chunk_id:[u8; 32]
     canonical_bytes: [u8; CANONICAL_CONTEXT_LENGTH],
     object_key: ObjectBackupKey,
 }

@@ -1,8 +1,3 @@
-#![deny(clippy::all)]
-
-pub mod error;
-mod io;
-
 use std::sync::Arc;
 
 use kchat_backup::{
@@ -17,9 +12,7 @@ use napi::{
 use napi_derive::napi;
 use zeroize::Zeroizing;
 
-use crate::error::{Error, invalid_argument, invalid_state, map_error};
-
-pub use crate::io::*;
+use super::error::{Error, invalid_argument, invalid_state, map_error};
 
 #[napi]
 pub enum BackupKeyMode {

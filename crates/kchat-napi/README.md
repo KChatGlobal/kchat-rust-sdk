@@ -1,6 +1,7 @@
-# Node.js binding for Rust Backup SDK
+# Node.js binding for Rust KChat SDK
 
-This crate provides bindings for the KChat backup Rust SDK using [NAPI-RS](https://napi.rs/).
+This crate provides unified bindings for the KChat MLS and backup Rust SDKs using [NAPI-RS](https://napi.rs/).
+The Node.js package is `@kchat/napi`. The existing `@kchat/mls-napi` package remains available.
 
 ## Prerequisites
 
@@ -23,8 +24,14 @@ This crate provides bindings for the KChat backup Rust SDK using [NAPI-RS](https
    │   ├── install.js
    │   └── version.js
    ├── src
-   │   ├── error.rs
-   │   ├── io.rs
+   │   ├── backup
+   │   │   ├── error.rs
+   │   │   ├── io.rs
+   │   │   ├── key.rs
+   │   │   └── mod.rs
+   │   ├── mls
+   │   │   ├── error.rs
+   │   │   └── mod.rs
    │   └── lib.rs
    ├── build.rs
    ├── Cargo.toml
@@ -34,9 +41,11 @@ This crate provides bindings for the KChat backup Rust SDK using [NAPI-RS](https
    ```
 
    - `Cargo.toml`: Configures the Rust crate and dependencies.
-   - `src/lib.rs`: Exposes the backup key and descriptor APIs.
-   - `src/io.rs`: Exposes the streaming encryption and decryption APIs.
-   - `src/error.rs`: Converts Rust errors to Node.js errors.
+   - `src/lib.rs`: Registers the `backup` and `mls` modules, following `kchat-uniffi`.
+   - `src/backup/key.rs`: Exposes backup key and descriptor APIs.
+   - `src/backup/io.rs`: Exposes streaming encryption and decryption APIs.
+   - `src/mls/mod.rs`: Exposes MLS APIs, including `UqMls`.
+   - Each module has its own `error.rs` for converting Rust errors to Node.js errors.
    - `index.js`: Loads the native binding for the current platform.
    - `index.d.ts`: Contains the generated TypeScript declarations.
 
@@ -65,3 +74,13 @@ This crate provides bindings for the KChat backup Rust SDK using [NAPI-RS](https
    The build generates `index.js`, `index.d.ts` and the platform-specific `.node` binary.
    Run `corepack yarn build` again after changing Rust code or removing generated files;
    Yarn may skip the install hook when dependencies have not changed.
+
+   Both domains are exported from the same package:
+
+   ```js
+   const { UqMls, generatePassword, sealBackupObjectV1 } = require('@kchat/napi');
+   ```
+
+   Existing backup callers should replace `@kchat/backup-napi` with `@kchat/napi`.
+   API names and arguments are unchanged. The crate uses Yarn's `node-modules` linker
+   for compatibility with the NAPI build tools.

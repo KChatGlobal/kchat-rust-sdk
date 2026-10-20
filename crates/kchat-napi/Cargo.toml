@@ -1,6 +1,6 @@
 [package]
-name = "kchat_backup_napi"
-description = "Node.js (NAPI-RS) bindings for the KChat backup SDK."
+name = "kchat-napi"
+description = "Unified Node.js (NAPI-RS) bindings for KChat MLS and encrypted backup APIs."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -19,6 +19,14 @@ napi-derive = "3.0.0"
 kchat-backup = { path = "../kchat-backup" }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
+openmls = { workspace = true }
+openmls_basic_credential = { workspace = true }
+openmls_traits = { workspace = true }
+openmls_rust_crypto = { workspace = true }
+rusqlite = { workspace = true, features = ["bundled"] }
+uq-openmls = { workspace = true }
+kchat-mls = { workspace = true }
+secrecy = { workspace = true }
 
 [build-dependencies]
 napi-build = "2"

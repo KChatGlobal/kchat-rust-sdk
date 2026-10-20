@@ -97,7 +97,6 @@ impl BackupMasterKey {
         })
     }
 
-    /// The returned Buffer is a caller-owned secret; erase it after use.
     #[napi]
     pub fn export_raw(&self) -> napi::Result<Buffer> {
         let bytes = with_core_key!(self.as_core()?, |key| Zeroizing::new(key.export_raw()));
@@ -112,7 +111,6 @@ impl BackupMasterKey {
         Ok(id.as_bytes().to_vec().into())
     }
 
-    /// Password keys require their 16-byte KDF salt; mnemonic keys require no salt.
     #[napi]
     pub fn seal_descriptor(
         &self,
@@ -213,7 +211,6 @@ impl From<DescriptorHeaderV1> for BackupDescriptorHeader {
     }
 }
 
-/// Reads bootstrap fields only. Authenticate the descriptor with openDescriptor afterwards.
 #[napi]
 pub fn parse_descriptor_header(bytes: Buffer) -> napi::Result<BackupDescriptorHeader> {
     DescriptorHeaderV1::parse(&bytes)

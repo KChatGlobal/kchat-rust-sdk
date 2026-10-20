@@ -1791,6 +1791,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kchat_backup_napi"
+version = "0.2.0"
+dependencies = [
+ "kchat-backup",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "kchat_mls_napi"
 version = "0.2.0"
 dependencies = [

@@ -22,7 +22,7 @@ use napi::{
 use napi_derive::napi;
 use zeroize::Zeroizing;
 
-use crate::{
+use super::{
     BackupObjectContext,
     error::{Error, invalid_state, map_error},
 };

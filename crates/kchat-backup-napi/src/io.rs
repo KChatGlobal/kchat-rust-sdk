@@ -14,7 +14,9 @@ use kchat_backup::{
 };
 use napi::{
     Env, JsDeferred, JsValue, Task,
-    bindgen_prelude::{BigInt, Buffer, CallbackContext, FnArgs, Function, PromiseRaw, Unknown},
+    bindgen_prelude::{
+        BigInt, Buffer, CallbackContext, FnArgs, FromNapiValue, Function, PromiseRaw, Unknown,
+    },
     threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode},
 };
 use napi_derive::napi;
@@ -110,18 +112,31 @@ fn core_error(code: BackupErrorCode) -> BackupError {
     BackupError::from_code(code)
 }
 
-fn discard_pending_exception(env: Env) {
-    let mut exception = std::ptr::null_mut();
-    // SAFETY: invoked only inside the TSFN callback on this environment's JS
-    // thread. The local handle is discarded without inspecting caller data.
-    // Promise.then/catch property access can throw while installing handlers.
-    unsafe {
-        napi::sys::napi_get_and_clear_last_exception(env.raw(), &mut exception);
-    }
+fn attach_promise_handlers<T, Resolve, Reject>(
+    env: Env,
+    promise: PromiseRaw<'_, T>,
+    resolve: Resolve,
+    reject: Reject,
+) -> napi::Result<()>
+where
+    T: FromNapiValue + 'static,
+    Resolve: Clone + FnOnce(CallbackContext<T>) -> napi::Result<()> + 'static,
+    Reject: Clone + FnOnce(CallbackContext<Unknown>) -> napi::Result<()> + 'static,
+{
+    let attach = env.create_function_from_closure::<FnArgs<(PromiseRaw<T>,)>, (), _>(
+        "attachBackupPromiseHandlers",
+        move |ctx| {
+            let promise: PromiseRaw<T> = ctx.first_arg()?;
+            if !promise.is_promise()? {
+                return Err(Error::IoError.into());
+            }
+            promise.then(resolve.clone())?.catch(reject.clone())?;
+            Ok(())
+        },
+    )?;
+    attach.call(FnArgs::from((promise,)))
 }
 
-/// Wait on the native worker, never the JS thread. Cancellation also works while a
-/// caller's Promise is pending; that caller remains responsible for stopping its I/O.
 fn wait_for_callback<T>(
     receiver: Receiver<Result<T, BackupErrorCode>>,
     cancelled: &AtomicBool,
@@ -163,11 +178,10 @@ impl BackupByteSource for SourceAdapter {
                 let success = sender.clone();
                 let failure = sender.clone();
                 let attached = result.and_then(|promise| {
-                    if !promise.is_promise()? {
-                        return Err(Error::IoError.into());
-                    }
-                    promise
-                        .then(move |ctx| {
+                    attach_promise_handlers(
+                        env,
+                        promise,
+                        move |ctx| {
                             // Copy on the JS thread before sending bytes to Rust so
                             // later JS mutations cannot race the worker's reads.
                             let result = if ctx.value.len() > maximum {
@@ -177,15 +191,14 @@ impl BackupByteSource for SourceAdapter {
                             };
                             let _ = success.try_send(result);
                             Ok(())
-                        })?
-                        .catch(move |_: CallbackContext<Unknown>| {
+                        },
+                        move |_: CallbackContext<Unknown>| {
                             let _ = failure.try_send(Err(BackupErrorCode::IoError));
                             Ok(())
-                        })?;
-                    Ok(())
+                        },
+                    )
                 });
                 if attached.is_err() {
-                    discard_pending_exception(env);
                     let _ = sender.try_send(Err(BackupErrorCode::IoError));
                 }
                 Ok(())
@@ -220,22 +233,20 @@ impl BackupByteSink for SinkAdapter {
                 let success = sender.clone();
                 let failure = sender.clone();
                 let attached = result.and_then(|promise| {
-                    if !promise.is_promise()? {
-                        return Err(Error::IoError.into());
-                    }
-                    promise
-                        .then(move |_| {
+                    attach_promise_handlers(
+                        env,
+                        promise,
+                        move |_| {
                             let _ = success.try_send(Ok(()));
                             Ok(())
-                        })?
-                        .catch(move |_: CallbackContext<Unknown>| {
+                        },
+                        move |_: CallbackContext<Unknown>| {
                             let _ = failure.try_send(Err(BackupErrorCode::IoError));
                             Ok(())
-                        })?;
-                    Ok(())
+                        },
+                    )
                 });
                 if attached.is_err() {
-                    discard_pending_exception(env);
                     let _ = sender.try_send(Err(BackupErrorCode::IoError));
                 }
                 Ok(())
@@ -319,8 +330,6 @@ impl Task for OpenBackupObjectTask {
     }
 }
 
-/// Seal caller-owned bytes. Both callbacks must return Promises; only one I/O
-/// callback is outstanding at a time. Close caller-owned streams in a finally block.
 #[napi]
 pub fn seal_backup_object_v1<'env>(
     env: &'env Env,
@@ -345,8 +354,6 @@ pub fn seal_backup_object_v1<'env>(
     )
 }
 
-/// Restore into provisional staging. Discard all output on failure; authenticate
-/// the entire object and validate the application schema before activating staging.
 #[napi(ts_return_type = "Promise<void>")]
 pub fn open_backup_object_v1<'env>(
     env: &'env Env,
@@ -374,8 +381,6 @@ pub fn open_backup_object_v1<'env>(
 type Resolver<T> = Box<dyn FnOnce(Env) -> napi::Result<T>>;
 type Deferred<T> = JsDeferred<T, Resolver<T>>;
 
-/// Keep the same Task compute/resolve split as the MLS binding, but do not park
-/// libuv workers waiting for JS callbacks which may themselves need libuv (fs).
 fn spawn_io_task<T: Task + 'static>(env: &Env, task: T) -> napi::Result<PromiseRaw<'_, T::JsValue>>
 where
     T::JsValue: 'static,

@@ -1,14 +1,14 @@
 {
-  "name": "@kchat/backup-napi",
+  "name": "@kchat/napi",
   "version": "0.2.0",
-  "description": "Node.js bindings for KChat backup SDK using NAPI-RS",
+  "description": "Unified Node.js bindings for KChat MLS and backup SDKs using NAPI-RS",
   "license": "MIT OR Apache-2.0",
   "author": "KChat Authors",
   "homepage": "https://kchat.com",
   "repository": {
     "type": "git",
     "url": "https://github.com/KChatGlobal/kchat-rust-sdk.git",
-    "directory": "crates/kchat-backup-napi"
+    "directory": "crates/kchat-napi"
   },
   "main": "index.js",
   "types": "index.d.ts",
@@ -37,7 +37,7 @@
     "arm64"
   ],
   "napi": {
-    "binaryName": "kchat-backup-napi",
+    "binaryName": "kchat-napi",
     "targets": [
       "x86_64-pc-windows-msvc",
       "x86_64-apple-darwin",
@@ -63,6 +63,7 @@
     "napi",
     "napi-rs",
     "backup",
+    "mls",
     "kchat",
     "native",
     "addon"

@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "crates/kchat-backup",
-    "crates/kchat-backup-napi",
+    "crates/kchat-napi",
     "crates/kchat-uniffi",
     "crates/kchat-mls",
     "crates/kchat-mls-uniffi",

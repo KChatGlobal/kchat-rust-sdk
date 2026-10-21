@@ -1770,6 +1770,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "kchat-napi"
+version = "0.2.0"
+dependencies = [
+ "kchat-backup",
+ "kchat-mls",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "openmls",
+ "openmls_basic_credential",
+ "openmls_rust_crypto",
+ "openmls_traits",
+ "rusqlite",
+ "secrecy",
+ "thiserror",
+ "uq-openmls",
+ "zeroize",
+]
+
+[[package]]
 name = "kchat-uniffi"
 version = "0.2.0"
 dependencies = [
@@ -1787,18 +1807,6 @@ dependencies = [
  "tokio",
  "uniffi",
  "uq-openmls",
- "zeroize",
-]
-
-[[package]]
-name = "kchat_backup_napi"
-version = "0.2.0"
-dependencies = [
- "kchat-backup",
- "napi",
- "napi-build",
- "napi-derive",
- "thiserror",
  "zeroize",
 ]
 

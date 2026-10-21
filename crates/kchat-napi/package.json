@@ -53,8 +53,6 @@
     "artifacts": "napi artifacts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
-    "e2e:server": "node e2e_backup.js",
-    "test:types": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext tests/types.ts",
     "version": "napi version",
     "bump": "node scripts/version.js",
     "install": "node scripts/install.js"

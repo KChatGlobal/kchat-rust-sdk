@@ -17,6 +17,7 @@ name = "mls_mobile_sdk_rs"
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
+doc = false
 
 [dependencies]
 openmls = { workspace = true }

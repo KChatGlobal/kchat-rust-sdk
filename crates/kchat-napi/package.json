@@ -1,0 +1,80 @@
+{
+  "name": "@kchat/napi",
+  "version": "0.2.0",
+  "description": "Unified Node.js bindings for KChat MLS and backup SDKs using NAPI-RS",
+  "license": "MIT OR Apache-2.0",
+  "author": "KChat Authors",
+  "homepage": "https://kchat.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KChatGlobal/kchat-rust-sdk.git",
+    "directory": "crates/kchat-napi"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "npm/**/*",
+    "scripts/**/*",
+    "*.node",
+    "README.md"
+  ],
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "napi": {
+    "binaryName": "kchat-napi",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-apple-darwin"
+    ]
+  },
+  "engines": {
+    "node": ">= 22.13.0"
+  },
+  "packageManager": "yarn@4.9.1",
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "version": "napi version",
+    "bump": "node scripts/version.js",
+    "install": "node scripts/install.js"
+  },
+  "keywords": [
+    "napi",
+    "napi-rs",
+    "backup",
+    "mls",
+    "kchat",
+    "native",
+    "addon"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.2.0",
+    "@types/node": "^22.0.0",
+    "argparse": "^2.0.1",
+    "chalk": "^5.6.2",
+    "typescript": "^5.9.2"
+  }
+}

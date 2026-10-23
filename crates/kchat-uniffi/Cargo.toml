@@ -17,6 +17,7 @@ name = "kchat_mobile_sdk_rs"
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
+doc = false
 
 [[test]]
 name = "ffi_max_past_epochs"

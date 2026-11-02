@@ -1,6 +1,6 @@
 use kchat_mobile_sdk_rs::backup::{
     BackupDescriptorBootstrap, BackupFfiError, BackupKeyMode, generate_mnemonic, generate_password,
-    import_from_mnemonic, import_from_password, import_from_raw,
+    import_from_mnemonic, import_from_password, import_from_raw, parse_descriptor_header,
 };
 
 const ACCOUNT: &str = "00112233-4455-6677-8899-aabbccddeeff";
@@ -158,4 +158,107 @@ fn rejects_an_object_context_with_a_mismatched_backup_id() {
             .create_object_context(ACCOUNT.to_owned(), vec![0; 32], vec![1; 32]),
         Err(BackupFfiError::ContextMismatch)
     ));
+}
+
+#[test]
+fn verifies_password_from_descriptor_without_downloading_an_object() {
+    let password = b"correct password".to_vec();
+    let generated = generate_password(password.clone()).unwrap();
+    let descriptor = generated
+        .key
+        .seal_descriptor(
+            ACCOUNT.to_owned(),
+            BackupDescriptorBootstrap::Password {
+                salt: generated.salt.clone(),
+            },
+        )
+        .unwrap();
+    let header = parse_descriptor_header(descriptor.clone()).unwrap();
+    assert_eq!(header.mode, BackupKeyMode::Password);
+    assert_eq!(header.salt, generated.salt);
+    let restored = import_from_password(password, header.salt.clone()).unwrap();
+    let opened = restored
+        .open_descriptor(ACCOUNT.to_owned(), descriptor.clone())
+        .unwrap();
+    assert_eq!(opened.header, header);
+    assert_eq!(
+        opened.backup_id,
+        generated.key.derive_backup_id(ACCOUNT.to_owned()).unwrap()
+    );
+    let wrong = import_from_password(b"wrong password".to_vec(), header.salt).unwrap();
+    assert_eq!(
+        wrong
+            .open_descriptor(ACCOUNT.to_owned(), descriptor)
+            .unwrap_err(),
+        BackupFfiError::AuthenticationFailed
+    );
+}
+
+#[test]
+fn rejects_tampered_descriptors_and_wrong_accounts() {
+    let generated = generate_mnemonic(12).unwrap();
+    let descriptor = generated
+        .key
+        .seal_descriptor(ACCOUNT.to_owned(), BackupDescriptorBootstrap::Mnemonic)
+        .unwrap();
+    let header = parse_descriptor_header(descriptor.clone()).unwrap();
+    assert_eq!(header.mode, BackupKeyMode::Mnemonic);
+    assert_eq!(header.salt, vec![0; 16]);
+    let opened = generated
+        .key
+        .open_descriptor(ACCOUNT.to_owned(), descriptor.clone())
+        .unwrap();
+    assert_eq!(
+        opened.backup_id,
+        generated.key.derive_backup_id(ACCOUNT.to_owned()).unwrap()
+    );
+    assert_eq!(
+        generated
+            .key
+            .open_descriptor(
+                "11112233-4455-6677-8899-aabbccddeeff".to_owned(),
+                descriptor.clone()
+            )
+            .unwrap_err(),
+        BackupFfiError::AuthenticationFailed
+    );
+    let mut tampered = descriptor;
+    *tampered.last_mut().unwrap() ^= 1;
+    assert_eq!(
+        generated
+            .key
+            .open_descriptor(ACCOUNT.to_owned(), tampered)
+            .unwrap_err(),
+        BackupFfiError::AuthenticationFailed
+    );
+}
+
+#[test]
+fn descriptor_bindings_reject_malformed_bytes_and_mode_mismatch() {
+    assert_eq!(
+        parse_descriptor_header(vec![0; 10]).unwrap_err(),
+        BackupFfiError::InvalidArgument
+    );
+    let generated = generate_mnemonic(12).unwrap();
+    assert_eq!(
+        generated
+            .key
+            .open_descriptor(ACCOUNT.to_owned(), vec![0; 10])
+            .unwrap_err(),
+        BackupFfiError::InvalidArgument
+    );
+    let mut descriptor = generated
+        .key
+        .seal_descriptor(ACCOUNT.to_owned(), BackupDescriptorBootstrap::Mnemonic)
+        .unwrap();
+    // A structurally valid password header on a mnemonic descriptor must be rejected.
+    descriptor[6] = 2;
+    descriptor[9] = 1;
+    assert_eq!(
+        generated
+            .key
+            .open_descriptor(ACCOUNT.to_owned(), descriptor)
+            .unwrap_err(),
+        BackupFfiError::InvalidArgument
+    );
 }

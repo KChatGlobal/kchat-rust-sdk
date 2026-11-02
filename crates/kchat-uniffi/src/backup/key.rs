@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use kchat_backup::{
     BACKUP_FORMAT_VERSION_V1, BackupAccountId, BackupChunkId, BackupId, BackupKeyMaterial,
-    BackupObjectContextV1, DescriptorHeaderV1, MnemonicBackupKey, PasswordBackupKey,
-    seal_descriptor_v1,
+    BackupObjectContextV1, DescriptorBackupModeV1, DescriptorHeaderV1, MnemonicBackupKey,
+    PasswordBackupKey, open_descriptor_v1, seal_descriptor_v1,
 };
 use zeroize::Zeroize;
 
@@ -19,6 +19,37 @@ pub enum BackupKeyMode {
 pub enum BackupDescriptorBootstrap {
     Mnemonic,
     Password { salt: Vec<u8> },
+}
+
+/// Public bootstrap fields. These are authenticated only after opening the descriptor.
+#[derive(uniffi::Record, Debug, Eq, PartialEq)]
+pub struct BackupDescriptorHeader {
+    pub mode: BackupKeyMode,
+    pub salt: Vec<u8>,
+}
+
+#[derive(uniffi::Record, Debug, Eq, PartialEq)]
+pub struct OpenedBackupDescriptor {
+    pub header: BackupDescriptorHeader,
+    pub backup_id: Vec<u8>,
+}
+
+impl From<DescriptorHeaderV1> for BackupDescriptorHeader {
+    fn from(header: DescriptorHeaderV1) -> Self {
+        Self {
+            mode: match header.backup_mode() {
+                DescriptorBackupModeV1::Mnemonic => BackupKeyMode::Mnemonic,
+                DescriptorBackupModeV1::Password => BackupKeyMode::Password,
+            },
+            salt: header.salt().to_vec(),
+        }
+    }
+}
+
+/// Parse the bootstrap fields needed to derive a key; this does not verify the password.
+#[uniffi::export]
+pub fn parse_descriptor_header(bytes: Vec<u8>) -> Result<BackupDescriptorHeader, BackupFfiError> {
+    Ok(DescriptorHeaderV1::parse(&bytes)?.into())
 }
 
 #[derive(uniffi::Object)]
@@ -157,6 +188,27 @@ impl BackupMasterKey {
             CoreBackupMasterKey::Mnemonic(key) => seal_descriptor(key, &account_id, header),
             CoreBackupMasterKey::Password(key) => seal_descriptor(key, &account_id, header),
         }
+    }
+
+    /// Authenticate the descriptor before downloading a backup object.
+    pub fn open_descriptor(
+        &self,
+        account_id: String,
+        bytes: Vec<u8>,
+    ) -> Result<OpenedBackupDescriptor, BackupFfiError> {
+        let account_id = BackupAccountId::parse(&account_id)?;
+        let parsed: BackupDescriptorHeader = DescriptorHeaderV1::parse(&bytes)?.into();
+        if parsed.mode != self.mode() {
+            return Err(BackupFfiError::InvalidArgument);
+        }
+        let (header, backup_id) = match &self.key {
+            CoreBackupMasterKey::Mnemonic(key) => open_descriptor_v1(key, &account_id, &bytes),
+            CoreBackupMasterKey::Password(key) => open_descriptor_v1(key, &account_id, &bytes),
+        }?;
+        Ok(OpenedBackupDescriptor {
+            header: header.into(),
+            backup_id: backup_id.as_bytes().to_vec(),
+        })
     }
 
     pub fn create_object_context(

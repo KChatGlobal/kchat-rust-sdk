@@ -586,7 +586,7 @@ impl UqMls {
     }
 
     pub fn create_group(&self, group_id: &str, public_key: Option<Vec<u8>>) -> Result<(), Error> {
-        if core::group(&self.provider, group_id, []).is_ok() {
+        if self.provider.load_group(group_id).is_ok() {
             return Err(Error::GroupIsAlreadyExisted);
         }
 
@@ -989,7 +989,7 @@ impl UqMls {
     }
 
     pub fn export_group_info(&self, group_id: &str) -> Result<Vec<u8>, Error> {
-        let mls_group = core::group(&self.provider, group_id, [])?;
+        let mls_group = self.provider.load_group(group_id)?;
         let signer = core::group_signer(&mls_group, &self.provider)?;
         Ok(core::export_group_info(
             &mls_group,
@@ -1137,14 +1137,14 @@ impl UqMls {
     }
 
     pub fn pending_commit(&self, group_id: &str) -> Result<Option<PendingCommitResult>, Error> {
-        let mls_group = core::group(&self.provider, group_id, [])?;
+        let mls_group = self.provider.load_group(group_id)?;
         let pending_commit = core::pending_commit(&mls_group);
 
         Ok(pending_commit.map(|commit| commit.into()))
     }
 
     pub fn pending_proposals(&self, group_id: &str) -> Result<PendingProposalsResult, Error> {
-        let mls_group = core::group(&self.provider, group_id, [])?;
+        let mls_group = self.provider.load_group(group_id)?;
         let result = core::pending_proposals(&mls_group);
 
         Ok(result.into())
@@ -1288,25 +1288,14 @@ impl UqMls {
     }
 
     pub fn delete_group(&self, group_id: &str) -> Result<(), Error> {
-        self.provider
-            .transaction(|tx_provider| {
-                let mut mls_group = core::group(tx_provider, group_id, [])?;
-                core::delete_group(&mut mls_group, tx_provider)?;
-                tx_provider
-                    .storage()
-                    .delete_decrypted_application_messages(&GroupId::from_slice(
-                        group_id.as_bytes(),
-                    ))?;
-                Ok(())
-            })
-            .map_err(|e| Error::Sqlite(e.to_string()))?;
-        let _ = delete_group_status(&self.conn, group_id);
-
+        self.provider.delete_group(group_id)?;
+        // MLS deletion is idempotent, so a failed status cleanup can be retried.
+        delete_group_status(&self.conn, group_id)?;
         Ok(())
     }
 
     pub fn members(&self, group_id: &str) -> Result<Vec<String>, Error> {
-        let group = core::group(&self.provider, group_id, [])?;
+        let group = self.provider.load_group(group_id)?;
 
         let members = group
             .members()

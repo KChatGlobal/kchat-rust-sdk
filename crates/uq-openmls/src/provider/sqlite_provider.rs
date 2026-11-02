@@ -12,7 +12,7 @@ use kchat_storage_provider::{
     Codec, SqliteConnectionPool, SqliteStorageProvider, TransactionalStorageProvider,
 };
 use openmls::{
-    group::{GroupId, MlsGroup},
+    group::{GroupEpoch, GroupId, MlsGroup},
     prelude::OpenMlsProvider,
 };
 use openmls_rust_crypto::RustCrypto;
@@ -173,6 +173,40 @@ impl SqliteProvider {
             };
             f(&tx_provider).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
         })
+    }
+
+    /// Load a group from one database snapshot, including its current secrets.
+    /// Writers can change an epoch row from current to past format atomically;
+    /// all reads in a group load must therefore share the same transaction.
+    pub fn load_group(&self, group_id: &str) -> Result<MlsGroup, Error> {
+        self.transaction(|tx_provider| Ok(crate::core::group(tx_provider, group_id, [])))?
+    }
+
+    /// Load selected epochs together with the public group in one snapshot.
+    pub fn load_group_with_epoch_message_secrets(
+        &self,
+        group_id: &str,
+        epochs: impl IntoIterator<Item = GroupEpoch>,
+    ) -> Result<MlsGroup, Error> {
+        self.transaction(|tx_provider| {
+            Ok(crate::core::group_with_epoch_message_secrets(
+                tx_provider,
+                group_id,
+                epochs,
+            ))
+        })?
+    }
+
+    /// Remove local group data even when the group cannot be loaded.
+    /// Repeated calls are safe; all group-scoped rows are deleted atomically.
+    pub fn delete_group(&self, group_id: &str) -> Result<(), Error> {
+        self.transaction(|tx_provider| {
+            tx_provider
+                .storage()
+                .delete_group_by_id(&GroupId::from_slice(group_id.as_bytes()))?;
+            Ok(())
+        })?;
+        Ok(())
     }
 
     fn migrate_epoch_message_secrets(&self, log: Option<&dyn Fn(String)>) {

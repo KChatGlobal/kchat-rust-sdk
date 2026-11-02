@@ -15,8 +15,8 @@ use rusqlite::{Connection, params};
 use secrecy::{ExposeSecret, SecretString};
 use uq_openmls::{
     core::{
-        Proposal, clear_pending_commit, delete_group, group, group_with_epoch_message_secrets,
-        merge_pending_commit, process_operation_message, process_proposal_message, process_welcome,
+        Proposal, clear_pending_commit, delete_group, group, merge_pending_commit,
+        process_operation_message, process_proposal_message, process_welcome,
     },
     error::Error,
     provider::SqliteProvider,
@@ -328,8 +328,9 @@ pub fn process_all_messages(
             .iter()
             .filter(|message| message.message_type != MessageType::Welcome)
             .map(|message| message.epoch.into());
-        let mut mls_group: Option<MlsGroup> =
-            group_with_epoch_message_secrets(provider, group_id, preload_epochs).ok();
+        let mut mls_group: Option<MlsGroup> = provider
+            .load_group_with_epoch_message_secrets(group_id, preload_epochs)
+            .ok();
 
         let mut group_deleted = false;
         // Check desync to merge or clear pending commit
@@ -581,11 +582,9 @@ pub fn process_all_messages(
                     });
                     if mls_group.is_some() {
                         if !commit_group_loaded {
-                            match group_with_epoch_message_secrets(
-                                provider,
-                                group_id,
-                                [msg.epoch.into()],
-                            ) {
+                            match provider
+                                .load_group_with_epoch_message_secrets(group_id, [msg.epoch.into()])
+                            {
                                 Ok(fresh_group) => {
                                     emit_log(log, || {
                                         format!(

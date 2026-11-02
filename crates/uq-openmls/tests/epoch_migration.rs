@@ -548,6 +548,79 @@ fn reopen_backfills_legacy_group_and_removes_legacy_row() {
 }
 
 #[test]
+fn snapshot_load_and_delete_work_with_a_real_legacy_database() {
+    let path = temp_db_path();
+    let db_path = path.to_str().unwrap();
+    let group_name = "legacy-snapshot-delete";
+    let legacy = LegacyProvider::new(db_path);
+    create_group_with_provider(&legacy, "alice", group_name, 5);
+    advance_group_epoch(&legacy, group_name);
+    drop(legacy);
+
+    let provider = SqliteProvider::new(db_path, &None).unwrap();
+    assert_eq!(provider.load_group(group_name).unwrap().epoch().as_u64(), 1);
+    assert_eq!(
+        provider
+            .load_group_with_epoch_message_secrets(group_name, [0.into()])
+            .unwrap()
+            .epoch()
+            .as_u64(),
+        1
+    );
+    provider.delete_group(group_name).unwrap();
+    provider.delete_group(group_name).unwrap();
+    drop(provider);
+    let reopened = SqliteProvider::new(db_path, &None).unwrap();
+    assert!(matches!(
+        reopened.load_group(group_name),
+        Err(uq_openmls::error::Error::GroupIsNotExisted)
+    ));
+    create_group_with_provider(&reopened, "alice", group_name, 5);
+    assert_eq!(reopened.load_group(group_name).unwrap().epoch().as_u64(), 0);
+}
+
+#[test]
+fn delete_recovers_a_legacy_group_after_secret_migration_failure() {
+    let path = temp_db_path();
+    let db_path = path.to_str().unwrap();
+    let group_name = "legacy-corrupt-delete";
+    let legacy = LegacyProvider::new(db_path);
+    create_group_with_provider(&legacy, "alice", group_name, 5);
+    drop(legacy);
+    let connection = Connection::open(db_path).unwrap();
+    connection
+        .execute(
+            "UPDATE openmls_group_data SET group_data = X'ff' WHERE data_type = 'message_secrets'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let provider = SqliteProvider::new(db_path, &None).unwrap();
+    assert!(provider.load_group(group_name).is_err());
+    provider.delete_group(group_name).unwrap();
+    drop(provider);
+    let reopened = SqliteProvider::new(db_path, &None).unwrap();
+    assert!(matches!(
+        reopened.load_group(group_name),
+        Err(uq_openmls::error::Error::GroupIsNotExisted)
+    ));
+    let connection = Connection::open(db_path).unwrap();
+    for table in [
+        "openmls_group_data",
+        "openmls_epoch_keys_pairs",
+        "openmls_group_epoch_message_secrets",
+    ] {
+        assert_eq!(
+            count_rows(&connection, table),
+            0,
+            "orphan rows remain in {table}"
+        );
+    }
+    assert!(legacy_message_secrets_migration_done(db_path));
+}
+
+#[test]
 fn reopen_cleans_up_lingering_legacy_row_for_already_migrated_group() {
     let db_path = temp_db_path();
     let db_path_str = db_path.to_string_lossy().into_owned();

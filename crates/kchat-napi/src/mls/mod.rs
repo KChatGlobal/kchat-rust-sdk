@@ -5,7 +5,7 @@ use kchat_mls::{
     OP_JOIN_BY_EXTERNAL_COMMIT, OP_NONE, create_custom_proposal, delete_group_status,
     extract_jid_from_member_id, get_all_group_ids, get_group_pending_operation,
     get_group_pending_operations_batch, insert_or_update_group_status,
-    open_group_status_connection, process_all_messages, process_custom_proposal,
+    open_compatible_group_status_connection, process_all_messages, process_custom_proposal,
 };
 use napi::{
     Task,
@@ -1950,7 +1950,11 @@ impl UqMls {
         maximum_forward_distance: u32,
     ) -> napi::Result<Self> {
         let secret = password.map(SecretString::from);
-        let conn = open_group_status_connection(&group_storage_path, &secret)
+        // Initialize the keystore first so a shared file already has its keyed
+        // format when status storage inspects it, regardless of path spelling.
+        let provider =
+            SqliteProvider::new(&storage_path, &secret).map_err(|e| Error::Mls(e.to_string()))?;
+        let conn = open_compatible_group_status_connection(&group_storage_path, &secret)
             .map_err(|e| Error::Storage(e.to_string()))?;
 
         Ok(Self {
@@ -1962,8 +1966,7 @@ impl UqMls {
             out_of_order_tolerance,
             maximum_forward_distance,
             conn,
-            provider: SqliteProvider::new(&storage_path, &secret)
-                .map_err(|e| Error::Mls(e.to_string()))?,
+            provider,
         })
     }
 

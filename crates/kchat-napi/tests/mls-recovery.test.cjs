@@ -1,12 +1,65 @@
 // Run against a freshly built .node file:
 // KCHAT_NAPI_TEST_ADDON=/absolute/path/kchat.node node --test tests/mls-recovery.test.cjs
 const assert = require('node:assert/strict');
-const { mkdtempSync } = require('node:fs');
+const { mkdtempSync, readFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { test } = require('node:test');
 const { UqMls } = require(process.env.KCHAT_NAPI_TEST_ADDON);
+
+test('encrypted client keystore opens with a legacy plaintext group-status database', { timeout: 45000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kchat-napi-legacy-status-'));
+  const clientPath = join(dir, 'client.sqlite');
+  const seedStatus = join(dir, 'seed-status.sqlite');
+  const legacyStatus = join(dir, 'legacy-status.sqlite');
+  const password = 'ab'.repeat(32);
+  const seed = new UqMls('alice', clientPath, seedStatus, 10, password, 5, 10);
+  await seed.createGroup('target');
+  const db = new DatabaseSync(legacyStatus);
+  db.exec("CREATE TABLE group_statuses (group_id TEXT PRIMARY KEY, pending_operation TEXT NOT NULL); INSERT INTO group_statuses VALUES ('target', 'CREATE_GROUP')");
+  db.close();
+  const api = new UqMls('alice', clientPath, legacyStatus, 10, password, 5, 10);
+  assert.deepEqual(await api.members('target'), ['alice']);
+  assert.equal(readFileSync(legacyStatus).subarray(0, 16).toString(), 'SQLite format 3\0');
+  assert.notEqual(readFileSync(clientPath).subarray(0, 16).toString(), 'SQLite format 3\0');
+  await api.encryptMessage('target', [1, 2, 3]);
+});
+
+test('new N-API group-status databases retain the desktop plaintext contract', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kchat-napi-status-format-'));
+  const clientPath = join(dir, 'client.sqlite');
+  const statusPath = join(dir, 'status.sqlite');
+  const api = new UqMls('alice', clientPath, statusPath, 10, 'cd'.repeat(32), 5, 10);
+  await api.createGroup('target');
+  assert.equal(readFileSync(statusPath).subarray(0, 16).toString(), 'SQLite format 3\0');
+  assert.notEqual(readFileSync(clientPath).subarray(0, 16).toString(), 'SQLite format 3\0');
+});
+
+test('a deliberately shared client/status path retains its encrypted database contract', { timeout: 45000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kchat-napi-shared-keystore-'));
+  const sharedPath = join(dir, 'shared.sqlite');
+  const api = new UqMls('alice', sharedPath, sharedPath, 10, 'ef'.repeat(32), 5, 10);
+  await api.createGroup('target');
+  assert.deepEqual(await api.members('target'), ['alice']);
+  assert.notEqual(readFileSync(sharedPath).subarray(0, 16).toString(), 'SQLite format 3\0');
+});
+
+test('equivalent shared paths use the database format without comparing path strings', { timeout: 45000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kchat-napi-shared-alias-'));
+  const clientPath = join(dir, 'shared.sqlite');
+  // Keep the alternate spelling: path.join would normalize the dot away.
+  const statusPath = `${dir}/./shared.sqlite`;
+  const password = 'ab'.repeat(32);
+  const api = new UqMls('alice', clientPath, statusPath, 10, password, 5, 10);
+  await api.createGroup('target');
+  assert.deepEqual(await api.members('target'), ['alice']);
+  assert.notEqual(readFileSync(clientPath).subarray(0, 16).toString(), 'SQLite format 3\0');
+
+  const reopened = new UqMls('alice', statusPath, clientPath, 10, password, 5, 10);
+  assert.deepEqual(await reopened.members('target'), ['alice']);
+  await reopened.encryptMessage('target', [1, 2, 3]);
+});
 
 async function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'kchat-napi-mls-recovery-'));

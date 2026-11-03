@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use kchat_storage_provider::SqliteConnectionPool;
+use kchat_storage_provider::{SqliteConnectionPool, sqlite_error_context};
 use openmls::{
     group::{MlsGroup, MlsGroupJoinConfig},
     prelude::{BasicCredential, Credential},
@@ -251,9 +251,17 @@ pub fn insert_or_update_group_status(
 }
 
 pub fn delete_group_status(conn: &GroupStatusConnection, group_id: &str) -> Result<(), Error> {
-    let connection = conn.checkout()?;
-    let mut stmt = connection.prepare_cached("DELETE FROM group_statuses WHERE group_id = ?1")?;
-    stmt.execute(params![group_id])?;
+    let connection = conn.checkout().map_err(|error| {
+        Error::Sqlite(format!("delete_group status connection checkout: {error}"))
+    })?;
+    let mut stmt = connection
+        .prepare_cached("DELETE FROM group_statuses WHERE group_id = ?1")
+        .map_err(|error| {
+            sqlite_error_context(error, "delete_group status table group_statuses prepare")
+        })?;
+    stmt.execute(params![group_id]).map_err(|error| {
+        sqlite_error_context(error, "delete_group status table group_statuses execute")
+    })?;
 
     Ok(())
 }

@@ -4,8 +4,8 @@ use openmls_traits::storage::Key;
 use rusqlite::params;
 
 use crate::{
-    STORAGE_PROVIDER_VERSION, codec::Codec, storage_provider::TransactionalStorageProvider,
-    wrappers::KeyRefWrapper,
+    STORAGE_PROVIDER_VERSION, codec::Codec, sqlite_error_context,
+    storage_provider::TransactionalStorageProvider, wrappers::KeyRefWrapper,
 };
 
 impl<C: Codec> TransactionalStorageProvider<'_, C> {
@@ -24,13 +24,17 @@ impl<C: Codec> TransactionalStorageProvider<'_, C> {
             "openmls_group_epoch_message_secrets",
             "openmls_decrypted_application_messages",
         ] {
-            self.tx().execute(
-                &format!("DELETE FROM {table} WHERE provider_version = ?1 AND group_id = ?2"),
-                params![
-                    STORAGE_PROVIDER_VERSION,
-                    KeyRefWrapper::<C, _>(group_id, PhantomData)
-                ],
-            )?;
+            self.tx()
+                .execute(
+                    &format!("DELETE FROM {table} WHERE provider_version = ?1 AND group_id = ?2"),
+                    params![
+                        STORAGE_PROVIDER_VERSION,
+                        KeyRefWrapper::<C, _>(group_id, PhantomData)
+                    ],
+                )
+                .map_err(|error| {
+                    sqlite_error_context(error, &format!("delete_group MLS table {table}"))
+                })?;
         }
         Ok(())
     }

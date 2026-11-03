@@ -47,7 +47,7 @@ pub use codec::Codec;
 pub use decrypted_application_messages::DecryptedApplicationMessage;
 pub use rusqlite::Connection;
 pub use storage_provider::{
-    SqliteConnectionPool, SqliteStorageProvider, TransactionalStorageProvider,
+    SqliteConnectionPool, SqliteStorageProvider, TransactionalStorageProvider, sqlite_error_context,
 };
 
 /// The version of the storage provider. If the `CURRENT_VERSION` of the OpenMLS

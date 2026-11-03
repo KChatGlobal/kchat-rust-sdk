@@ -217,6 +217,14 @@ fn deletion_rolls_back_if_a_later_table_delete_fails() {
     db.execute_batch("CREATE TRIGGER fail_delete BEFORE DELETE ON openmls_proposals BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END").unwrap();
     let error = api.delete_group("debug-delete").unwrap_err().to_string();
     assert!(error.contains("injected delete failure"));
+    assert!(
+        error.contains("openmls_proposals"),
+        "missing failing table: {error}"
+    );
+    assert!(
+        error.contains("extended_code: 1811"),
+        "missing SQLite code: {error}"
+    );
     assert_eq!(retained_rows(&db), before, "earlier deletes must roll back");
     db.execute_batch("DROP TRIGGER fail_delete").unwrap();
     api.delete_group("debug-delete").unwrap();
@@ -234,6 +242,14 @@ fn status_cleanup_failure_is_reported_and_can_be_retried() {
     status.execute_batch("CREATE TRIGGER fail_status_delete BEFORE DELETE ON group_statuses BEGIN SELECT RAISE(ABORT, 'injected status failure'); END").unwrap();
     let error = api.delete_group("debug-delete").unwrap_err().to_string();
     assert!(error.contains("injected status failure"));
+    assert!(
+        error.contains("group_statuses"),
+        "missing status table: {error}"
+    );
+    assert!(
+        error.contains("extended_code: 1811"),
+        "missing SQLite code: {error}"
+    );
     assert_eq!(retained_rows(&db), 0, "MLS data was already deleted");
     status
         .execute_batch("DROP TRIGGER fail_status_delete")

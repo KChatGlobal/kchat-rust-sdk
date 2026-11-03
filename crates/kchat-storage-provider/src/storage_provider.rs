@@ -66,6 +66,7 @@ struct R2d2ConnectionManager {
 #[derive(Clone)]
 pub struct SqliteConnectionPool {
     pool: Pool<R2d2ConnectionManager>,
+    opener: std::sync::Arc<ConnectionOpener>,
 }
 
 pub struct ConnectionLease {
@@ -81,8 +82,9 @@ impl ManageConnection for R2d2ConnectionManager {
     }
 
     fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
-        conn.execute_batch("")?;
-        Ok(())
+        // A failed SQLCipher page read can leave a connection unusable. An empty
+        // batch never touches the pager and would return that connection again.
+        conn.query_row("PRAGMA schema_version", [], |_| Ok(()))
     }
 
     fn has_broken(&self, _conn: &mut Self::Connection) -> bool {
@@ -94,13 +96,26 @@ fn pool_checkout_error(error: r2d2::Error) -> rusqlite::Error {
     rusqlite::Error::ToSqlConversionFailure(Box::new(error))
 }
 
+/// Attach operation context to a SQLite failure while preserving its error codes.
+/// Other rusqlite error variants are returned unchanged.
+pub fn sqlite_error_context(error: rusqlite::Error, context: &str) -> rusqlite::Error {
+    match error {
+        rusqlite::Error::SqliteFailure(code, detail) => {
+            let detail = detail.unwrap_or_else(|| code.to_string());
+            rusqlite::Error::SqliteFailure(code, Some(format!("{context}: {detail} ({code:?})")))
+        }
+        other => other,
+    }
+}
+
 impl SqliteConnectionPool {
     pub fn new<F>(max_size: usize, opener: F) -> Self
     where
         F: Fn() -> Result<Connection, rusqlite::Error> + Send + Sync + 'static,
     {
+        let opener: std::sync::Arc<ConnectionOpener> = std::sync::Arc::new(opener);
         let manager = R2d2ConnectionManager {
-            opener: std::sync::Arc::new(opener),
+            opener: opener.clone(),
         };
 
         Self {
@@ -108,7 +123,13 @@ impl SqliteConnectionPool {
                 .max_size(max_size.max(1) as u32)
                 .connection_timeout(POOL_ACQUIRE_TIMEOUT)
                 .build_unchecked(manager),
+            opener,
         }
+    }
+
+    /// Open an independently configured connection that is never returned to the pool.
+    pub fn open_fresh_connection(&self) -> Result<Connection, rusqlite::Error> {
+        (self.opener)()
     }
 
     pub fn checkout(&self) -> Result<ConnectionLease, rusqlite::Error> {

@@ -299,3 +299,73 @@ fn delete_clears_pending_commit_and_allows_recreation() {
     assert!(api.pending_commit("debug-delete").unwrap().is_none());
     assert_eq!(api.members("debug-delete").unwrap(), vec!["alice"]);
 }
+
+#[test]
+fn uniffi_upgrades_encrypted_client_with_legacy_plaintext_group_status() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let base = std::env::temp_dir().join(format!(
+        "uniffi-legacy-status-{}-{nonce}",
+        std::process::id()
+    ));
+    let client = base
+        .with_extension("client.sqlite")
+        .to_string_lossy()
+        .into_owned();
+    let seed_status = base
+        .with_extension("seed-status.sqlite")
+        .to_string_lossy()
+        .into_owned();
+    let legacy_status = base
+        .with_extension("legacy-status.sqlite")
+        .to_string_lossy()
+        .into_owned();
+    let password = "local-uniffi-compatibility-test-password".to_owned();
+    let seed = UqMls::new(
+        "alice".to_owned(),
+        client.clone(),
+        seed_status,
+        10,
+        48,
+        Some(password.clone()),
+        5,
+        10,
+        None,
+    )
+    .unwrap();
+    seed.create_group("target", None).unwrap();
+    let status = Connection::open(&legacy_status).unwrap();
+    status.execute_batch("CREATE TABLE group_statuses (group_id TEXT PRIMARY KEY, pending_operation TEXT NOT NULL); INSERT INTO group_statuses VALUES ('target', 'legacy-marker')").unwrap();
+    drop(status);
+
+    let upgraded = UqMls::new(
+        "alice".to_owned(),
+        client.clone(),
+        legacy_status.clone(),
+        10,
+        48,
+        Some(password),
+        5,
+        10,
+        None,
+    )
+    .expect("plaintext group-status must not be opened with the client keystore key");
+    assert_eq!(upgraded.members("target").unwrap(), vec!["alice"]);
+    let status = Connection::open(&legacy_status).unwrap();
+    let marker: String = status
+        .query_row(
+            "SELECT pending_operation FROM group_statuses WHERE group_id='target'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker, "legacy-marker");
+    assert_eq!(
+        &std::fs::read(&legacy_status).unwrap()[..16],
+        b"SQLite format 3\0"
+    );
+    assert_ne!(&std::fs::read(&client).unwrap()[..16], b"SQLite format 3\0");
+    upgraded.delete_group("target").unwrap();
+}

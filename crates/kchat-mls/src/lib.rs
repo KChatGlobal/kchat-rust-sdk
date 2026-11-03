@@ -2,6 +2,8 @@ pub mod mnemonic;
 
 use std::{
     collections::{HashMap, HashSet},
+    fs::File,
+    io::{ErrorKind, Read},
     time::Duration,
 };
 
@@ -46,7 +48,7 @@ fn configure_group_status_connection(
     Ok(())
 }
 
-pub fn open_group_status_connection(
+fn open_group_status_connection_with_secret(
     path: &str,
     secret: &Option<SecretString>,
 ) -> Result<GroupStatusConnection, Error> {
@@ -59,6 +61,58 @@ pub fn open_group_status_connection(
     });
     initialize(&conn)?;
     Ok(conn)
+}
+
+/// Open existing plaintext or encrypted status databases without changing their
+/// format. New databases use the supplied secret, preserving UniFFI encryption.
+pub fn open_group_status_connection(
+    path: &str,
+    secret: &Option<SecretString>,
+) -> Result<GroupStatusConnection, Error> {
+    if group_status_file_is_encrypted(path)? == Some(false) {
+        open_group_status_connection_with_secret(path, &None)
+    } else {
+        open_group_status_connection_with_secret(path, secret)
+    }
+}
+
+/// Preserve the desktop N-API storage contract: new group-status databases are
+/// plaintext, while the client keystore remains encrypted by its own provider.
+/// Also accept encrypted group-status files created by newer SDK builds, using
+/// the supplied password. Never retry a failed encrypted open as plaintext.
+pub fn open_compatible_group_status_connection(
+    path: &str,
+    secret: &Option<SecretString>,
+) -> Result<GroupStatusConnection, Error> {
+    if group_status_file_is_encrypted(path)?.unwrap_or(false) {
+        open_group_status_connection_with_secret(path, secret)
+    } else {
+        open_group_status_connection_with_secret(path, &None)
+    }
+}
+
+// None means the file has no existing format (missing or empty). A non-SQLite
+// header requires the supplied key; an open failure never triggers a retry.
+fn group_status_file_is_encrypted(path: &str) -> Result<Option<bool>, Error> {
+    match File::open(path) {
+        Ok(mut file) => {
+            if file
+                .metadata()
+                .map_err(|e| Error::Storage(e.to_string()))?
+                .len()
+                == 0
+            {
+                Ok(None)
+            } else {
+                let mut header = [0u8; 16];
+                file.read_exact(&mut header)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
+                Ok(Some(header != *b"SQLite format 3\0"))
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::Storage(error.to_string())),
+    }
 }
 
 #[inline]

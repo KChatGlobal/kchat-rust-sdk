@@ -199,14 +199,41 @@ impl SqliteProvider {
 
     /// Remove local group data even when the group cannot be loaded.
     /// Repeated calls are safe; all group-scoped rows are deleted atomically.
+    /// Recovery from damaged pages may unlink rows without scrubbing freed contents.
     pub fn delete_group(&self, group_id: &str) -> Result<(), Error> {
-        self.transaction(|tx_provider| {
-            tx_provider
-                .storage()
-                .delete_group_by_id(&GroupId::from_slice(group_id.as_bytes()))?;
-            Ok(())
-        })?;
-        Ok(())
+        let pool = self.mls_storage.connection_pool();
+        let group_id = GroupId::from_slice(group_id.as_bytes());
+        let result = pool.transaction(|tx| {
+            TransactionalStorageProvider::<JsonCodec>::new(tx).delete_group_by_id(&group_id)
+        });
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let recoverable = matches!(&error, rusqlite::Error::SqliteFailure(code, _)
+                    if matches!(code.extended_code & 0xff, 1 | 11));
+                if !recoverable {
+                    return Err(Error::Sqlite(format!(
+                        "delete_group MLS transaction: {error}"
+                    )));
+                }
+                // Scrubbing a damaged overflow page can fail even though SQLite
+                // can unlink its row. Disable scrubbing only on this disposable,
+                // freshly keyed connection; normal pooled connections retain it.
+                let cleanup = (|| -> Result<(), rusqlite::Error> {
+                    let mut connection = pool.open_fresh_connection()?;
+                    connection.pragma_update(None, "secure_delete", false)?;
+                    let tx = connection.transaction()?;
+                    TransactionalStorageProvider::<JsonCodec>::new(&tx)
+                        .delete_group_by_id(&group_id)?;
+                    tx.commit()
+                })();
+                cleanup.map_err(|cleanup_error| {
+                    Error::Sqlite(format!(
+                        "delete_group MLS transaction: {error}; isolated cleanup: {cleanup_error}"
+                    ))
+                })
+            }
+        }
     }
 
     fn migrate_epoch_message_secrets(&self, log: Option<&dyn Fn(String)>) {

@@ -179,17 +179,54 @@ pub fn add_members<Provider: OpenMlsProvider>(
 
     let identities = get_identity_from_key_packages(&key_packages);
     let identities: Vec<&[u8]> = identities.iter().map(|id| id.as_slice()).collect();
-    if !find_members_by_identity(&group.members().collect::<Vec<Member>>(), &identities).is_empty()
-    {
+    let members = group.members().collect::<Vec<Member>>();
+    let replaced_leaves: Vec<LeafNodeIndex> = find_members_by_identity(&members, &identities)
+        .into_iter()
+        .map(|member| member.index)
+        .collect();
+    // A client cannot remove its own leaf in its own commit.
+    if replaced_leaves.contains(&group.own_leaf_index()) {
         return Err(Error::SomeMembersAlreadyExistedInGroup);
     }
 
     let pre_tree_hash = group.tree_hash().to_owned();
-    let (commit, welcome, group_info) = group.add_members(provider, signer, &key_packages)?;
-    let group_info = if let Some(group_info) = group_info {
-        Some(group_info.tls_serialize_detached()?)
-    } else {
-        None
+    if replaced_leaves.is_empty() {
+        let (commit, welcome, group_info) = group.add_members(provider, signer, &key_packages)?;
+        let group_info = if let Some(group_info) = group_info {
+            Some(group_info.tls_serialize_detached()?)
+        } else {
+            None
+        };
+
+        return Ok(AddMembersResult {
+            welcome: welcome.tls_serialize_detached()?,
+            commit: commit.tls_serialize_detached()?,
+            group_info,
+            current_epoch: group.epoch().as_u64(),
+            pre_tree_hash,
+        });
+    }
+
+    // A device that left deleted its local group, so a leaf with the same identity
+    // is replaced: the old leaf is removed and the device rejoins through the
+    // Welcome of the same commit. A device that is still active recovers by
+    // processing that Welcome, which replaces its old group.
+    let (commit, welcome, group_info) = group
+        .commit_builder()
+        .propose_removals(replaced_leaves)
+        .propose_adds(key_packages)
+        .load_psks(provider.storage())?
+        .build(provider.rand(), provider.crypto(), signer, |_| true)?
+        .stage_commit(provider)?
+        .into_messages();
+    let welcome = welcome.ok_or_else(|| {
+        Error::AddMembers("Replacing existing members produced no Welcome".to_owned())
+    })?;
+    let group_info = match group_info.as_ref().map(|message| message.body()) {
+        Some(MlsMessageBodyOut::GroupInfo(group_info)) => {
+            Some(group_info.tls_serialize_detached()?)
+        }
+        _ => None,
     };
 
     Ok(AddMembersResult {
@@ -503,10 +540,49 @@ pub struct JoinByExternalCommitResult {
     pub pre_tree_hash: Vec<u8>,
 }
 
+/// Looks up the signature key of a leaf this client left behind in the tree.
+///
+/// Leaving deletes the local group, but the leaf stays until someone commits its
+/// removal. Such a leaf only counts as stale when this client has no local group;
+/// while one exists (or cannot be read) rejoining is refused.
+///
+/// Returns the key when it is still stored, so the external commit can reuse it
+/// and OpenMLS removes the old leaf in the same commit. Returns `None` when the
+/// key is gone (local MLS storage was lost): the join then uses a new key and the
+/// old leaf stays in the tree next to the new one.
+fn stale_leaf_signature_key<Provider: OpenMlsProvider>(
+    provider: &Provider,
+    group_id: &GroupId,
+    existing: &[&Member],
+    ciphersuite: Ciphersuite,
+) -> Result<Option<Vec<u8>>, Error> {
+    match MlsGroup::load(provider.storage(), group_id) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => return Err(Error::CredentialIsExisted),
+    }
+
+    Ok(existing
+        .iter()
+        .map(|member| member.signature_key.as_slice())
+        .find(|signature_key| {
+            SignatureKeyPair::read(
+                provider.storage(),
+                signature_key,
+                ciphersuite.signature_algorithm(),
+            )
+            .is_some()
+        })
+        .map(<[u8]>::to_vec))
+}
+
 /// Join an existing group through an External Commit.
 ///
-/// If there is a group member in the group with the same identity as
-/// this user, return error.
+/// If a member with the same identity as this user is already in the group:
+/// - with a local group (or one that cannot be read), it returns
+///   [`Error::CredentialIsExisted`];
+/// - otherwise the leaf is stale. When its signature key is still stored the
+///   join reuses it and replaces the leaf; when the key is gone the join uses a
+///   new key and the stale leaf remains.
 pub fn join_by_external_commit<Provider: OpenMlsProvider>(
     provider: &Provider,
     user_id: &str,
@@ -545,19 +621,26 @@ pub fn join_by_external_commit<Provider: OpenMlsProvider>(
     let pre_tree_hash = group_context.tree_hash().to_owned();
 
     // Check if user is already a member (use PublicGroup if available, skip if it fails)
+    let mut public_key = public_key;
     if let Ok((public_group, _)) = PublicGroup::from_external(
         provider.crypto(),
         provider.storage(),
         ratchet_tree_extension.ratchet_tree().to_owned(),
         verifiable_group_info.clone(),
         ProposalStore::new(),
-    ) && !find_members_by_identity(
-        &public_group.members().collect::<Vec<Member>>(),
-        &[user_id.as_bytes()],
-    )
-    .is_empty()
-    {
-        return Err(Error::CredentialIsExisted);
+    ) {
+        let members = public_group.members().collect::<Vec<Member>>();
+        let existing = find_members_by_identity(&members, &[user_id.as_bytes()]);
+        if !existing.is_empty()
+            && let Some(stale_key) = stale_leaf_signature_key(
+                provider,
+                group_context.group_id(),
+                &existing,
+                ciphersuite,
+            )?
+        {
+            public_key = Some(stale_key);
+        }
     }
 
     let (credential_with_key, signer) =

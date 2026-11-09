@@ -138,7 +138,7 @@ fn test_three_members_create_group_and_add_member() {
 }
 
 #[test]
-fn test_add_duplicate_member() {
+fn test_add_duplicate_member_replaces_its_leaf() {
     // Init alice device.
     let alice_provider = OpenMlsRustCrypto::default();
     let alice_user_id = "alice";
@@ -187,13 +187,27 @@ fn test_add_duplicate_member() {
         generate_key_package(bob_user_id, &bob_provider, DEFAULT_CIPHERSUITE, false, None)
             .expect("should generate key package success");
 
-    // Alice add Bob duplicate
-    let result = add_members(&alice_provider, group_id, &[bob_new_key_package]);
+    // Alice adds Bob again: his existing leaf is replaced in the same commit.
+    let AddMembersResult { welcome, .. } =
+        add_members(&alice_provider, group_id, &[bob_new_key_package])
+            .expect("adding Bob again should replace his leaf");
+    merge_pending_commit(&alice_provider, group_id).expect("should merge pending commit success");
 
-    assert!(matches!(
-        result,
-        Err(Error::SomeMembersAlreadyExistedInGroup)
-    ));
+    // Bob joins with the new Welcome, which replaces his old local group.
+    let bob_group = process_welcome(
+        &bob_provider,
+        &welcome,
+        &MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .build(),
+    )
+    .expect("should process the replacing `welcome` success");
+
+    let bob_leaves = bob_group
+        .members()
+        .filter(|member| member.credential.serialized_content() == bob_user_id.as_bytes())
+        .count();
+    assert_eq!(bob_leaves, 1);
 }
 
 #[test]

@@ -303,12 +303,15 @@ fn failed_operation_does_not_break_follow_up_valid_flow() {
         group_id,
     );
 
-    let bob_duplicate_key_package = generate_one_key_package(&bob);
-    let duplicate_add_error = match alice
-        .api
-        .add_members(group_id, &[bob_duplicate_key_package])
-    {
-        Ok(_) => panic!("adding bob again should fail"),
+    // Adding a key package with the committer's own identity must still fail: a
+    // client cannot replace its own leaf in its own commit.
+    let other_alice = TestClient::new(
+        "failed_operation_does_not_break_follow_up_valid_flow",
+        "alice",
+    );
+    let own_identity_key_package = generate_one_key_package(&other_alice);
+    let duplicate_add_error = match alice.api.add_members(group_id, &[own_identity_key_package]) {
+        Ok(_) => panic!("adding alice's own identity should fail"),
         Err(err) => err,
     };
     assert!(

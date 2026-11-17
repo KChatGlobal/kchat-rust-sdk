@@ -307,6 +307,7 @@ __metadata:
   resolution: "@kchat/napi@workspace:."
   dependencies:
     "@napi-rs/cli": "npm:^3.2.0"
+    "@noble/curves": "npm:2.0.1"
     "@types/node": "npm:^22.0.0"
     argparse: "npm:^2.0.1"
     chalk: "npm:^5.6.2"
@@ -897,6 +898,22 @@ __metadata:
     "@napi-rs/wasm-tools-win32-x64-msvc":
       optional: true
   checksum: 10c0/b026f03e13509cce15a167e6e1af16dbbcd144d1117e815135cb635801666c488eb50d7d3ffd045f93faf5e78d894ff1c7c9b91417d23a5f91f7f59ec695ee1b
+  languageName: node
+  linkType: hard
+
+"@noble/curves@npm:2.0.1":
+  version: 2.0.1
+  resolution: "@noble/curves@npm:2.0.1"
+  dependencies:
+    "@noble/hashes": "npm:2.0.1"
+  checksum: 10c0/e0b329eb9229e862d3b7203e0444bd479e9ecf2d5990181908dad416aab69106717ca696fc7b12ad0eb19d710f58c454646b27ce517a4298ab9abc89a9bdb6ee
+  languageName: node
+  linkType: hard
+
+"@noble/hashes@npm:2.0.1":
+  version: 2.0.1
+  resolution: "@noble/hashes@npm:2.0.1"
+  checksum: 10c0/e81769ce21c3b1c80141a3b99bd001f17edea09879aa936692ae39525477386d696101cd573928a304806efb2b9fa751e1dd83241c67d0c84d30091e85c79bdb
   languageName: node
   linkType: hard
 

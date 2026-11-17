@@ -9,6 +9,7 @@ members = [
     "crates/kchat-mls-napi",
     "crates/uq-openmls",
     "crates/kchat-storage-provider",
+    "crates/kchat-file-crypto",
 ]
 
 [workspace.package]

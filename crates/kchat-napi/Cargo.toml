@@ -17,6 +17,7 @@ crate-type = ["cdylib"]
 napi = { version = "3.12.2", features = ["napi6"] }
 napi-derive = "3.0.0"
 kchat-backup = { path = "../kchat-backup" }
+kchat-file-crypto = { path = "../kchat-file-crypto" }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
 openmls = { workspace = true }

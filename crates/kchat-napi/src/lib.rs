@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 
 pub mod backup;
+pub mod file_crypto;
 pub mod mls;
 
 pub use backup::{

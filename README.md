@@ -12,6 +12,8 @@ The workspace is composed of crates under `crates/`:
 
 - **`kchat-storage-provider`** — SQLite-backed implementation of the OpenMLS `StorageProvider` trait. Uses `rusqlite` with `r2d2` connection pooling and `refinery` migrations (see `crates/kchat-storage-provider/migrations`).
 - **`kchat-backup`** — encrypted-backup core: typed key derivation, `KCBD` descriptors, and bounded encrypted object writing.
+- **`kchat-file-crypto`** — file encryption core: VOPRF-assisted content keys (RFC 9497, ristretto255-SHA512) with a tenant pepper, signed key-service configuration, whole-file STREAM encryption, and a dedicated SQLCipher key store. Independent of the MLS crates.
+- **`kchat-file-crypto-ffi`** — C ABI over `kchat-file-crypto` (static library + header), with a Go cgo binding, a sample Go client and end-to-end tests against an in-process key service.
 - **`kchat-uniffi`** — unified Swift/Kotlin bindings for MLS and backup, producing `kchat_mobile_sdk_rs`.
 - **`uq-openmls`** — Thin wrapper around OpenMLS exposing the core MLS primitives (group creation, welcome processing, proposal/commit handling, fork resolution) used by KChat. Also wires the SQLite storage provider into an `OpenMlsProvider`.
 - **`kchat-mls`** — High-level KChat MLS logic on top of `uq-openmls`: group lifecycle management, batch message processing, group-status persistence, and tree-hash bookkeeping.
